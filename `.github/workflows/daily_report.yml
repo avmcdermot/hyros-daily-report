@@ -1,0 +1,33 @@
+```yaml
+   name: Daily Hyros Edge Report
+
+   on:
+     schedule:
+       - cron: '0 9 * * *'
+     workflow_dispatch:
+
+   jobs:
+     generate-report:
+       runs-on: ubuntu-latest
+
+       steps:
+         - name: Check out repository
+           uses: actions/checkout@v4
+
+         - name: Set up Python
+           uses: actions/setup-python@v5
+           with:
+             python-version: '3.12'
+
+         - name: Install dependencies
+           run: pip install -r requirements.txt
+
+         - name: Run daily report
+           env:
+             HYROS_API_KEY: ${{ secrets.HYROS_API_KEY }}
+             ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+             GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+             GOOGLE_DOC_ID: ${{ secrets.GOOGLE_DOC_ID }}
+             HYROS_PRODUCT_TAG: ${{ secrets.HYROS_PRODUCT_TAG }}
+           run: python daily_report.py
+   ```
