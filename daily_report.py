@@ -259,7 +259,7 @@ def build_data_summary(sales, report_date):
     total_refunded = 0
     platforms = {}
     campaigns = {}
-    products = {}  # {name: {"revenue": X, "count": Y}}
+    products = {}  # {name: {"revenue": X, "count": Y, "refunded": Z}}
     source_pages = {}
     ad_creatives = {}
     utm_campaigns = {}  # {campaign: {"purchases": X, "revenue": Y}}
@@ -305,12 +305,13 @@ def build_data_summary(sales, report_date):
                     ad_creatives[ad_name]["purchases"] += 1
                     ad_creatives[ad_name]["revenue"] += order_value
 
-        # Product mix with counts
+        # Product mix with counts and refunds
         for item in cust["line_items"]:
             prod = item["product"]
             if prod not in products:
-                products[prod] = {"revenue": 0, "count": 0}
+                products[prod] = {"revenue": 0, "count": 0, "refunded": 0}
             products[prod]["revenue"] += item["revenue"]
+            products[prod]["refunded"] += item["refunded"]
             products[prod]["count"] += 1
 
         # Source checkout pages
@@ -438,7 +439,9 @@ Layout rules:
 - Footnotes: #5A6B7A italic, 12px, inside the container at bottom
 
 Product Mix table rules:
-- Columns: Product | Count | Revenue | % of Gross
+- Columns: Product | Count | Net Revenue | % of Total
+- Revenue shown should be NET (gross minus refunds for that product). Each product in revenue_by_product has "revenue", "count", and "refunded" fields. Show: revenue - refunded.
+- If a product has refunds > 0, show a small red "REFUNDED" badge next to the product name AND add a footnote with the refund amount
 - The "Count" column should show a small amber (#F07520) circular badge with the number inside (display:inline-block, width:28px, height:28px, line-height:28px, text-align:center, border-radius:50%, background:#F07520, color:#000725, font-weight:bold, font-size:13px)
 
 UTM Breakdown table rules:
@@ -457,8 +460,9 @@ Structure:
 6. UTM Breakdown (utm_campaign, utm_source, utm_ad tables — MUST show all rows with data)
 7. Attribution: First Touch breakdown (platform + campaign with revenue) — MUST include this section
 8. Attribution: Last Touch breakdown — MUST include this section
-9. Individual Purchase Details table (email, order value, items, source page, first touch, utm_campaign, utm_ad, utm_ad_type, device)
-10. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
+9. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
+
+NOTE: Do NOT include an Individual Purchase Details table. That data is logged separately in a Google Sheet.
 
 CRITICAL: You must include ALL sections listed above. Do not skip or omit any section even if the data seems sparse.
 
@@ -471,9 +475,8 @@ Contextual footnotes:
 - These footnotes add crucial context. Always include them.
 
 Refund handling:
-- In the Product Mix table, if a product has a refund, show a small red "REFUNDED" badge or strikethrough on that row
+- In the Product Mix table, if a product has refunded > 0, show a small red "REFUNDED" badge next to the product name
 - In the KPI section, the refund should be clearly called out under Gross Revenue (already doing this with "-$X refund")
-- In the Individual Purchase Details table, clearly mark refunded orders with a red "REFUNDED" badge
 
 Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs. Keep written analysis to 2-3 punchy bullet points max."""
 
@@ -489,7 +492,7 @@ def analyze_with_claude(summary):
         messages=[
             {
                 "role": "user",
-                "content": f"Generate the styled HTML daily report for this data:\n\n{json.dumps(summary, indent=2)}",
+                "content": f"Generate the styled HTML daily report for this data:\n\n{json.dumps({k: v for k, v in summary.items() if k != 'purchase_details'}, indent=2)}",
             }
         ],
     )
@@ -609,6 +612,82 @@ def append_to_sheet(summary, report_link=""):
     print(f"  Metrics appended to Sheet")
 
 
+def append_purchase_log(summary):
+    """Append individual purchase details to a 'Purchase Log' tab in the Sheet."""
+    if not GOOGLE_SHEET_ID:
+        print("  Google Sheet not configured. Skipping purchase log.")
+        return
+
+    creds_json = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_json, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds)
+
+    # Ensure "Purchase Log" sheet exists
+    try:
+        sheet_meta = service.spreadsheets().get(spreadsheetId=GOOGLE_SHEET_ID).execute()
+        sheet_names = [s["properties"]["title"] for s in sheet_meta.get("sheets", [])]
+        if "Purchase Log" not in sheet_names:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                body={"requests": [{"addSheet": {"properties": {"title": "Purchase Log"}}}]},
+            ).execute()
+            # Write headers
+            headers = [[
+                "Date", "Customer Email", "Order Value", "Refunded", "Net Value",
+                "Items", "Source Page", "First Touch Source", "First Touch Platform",
+                "Campaign", "Ad Name", "Last Touch Source", "Last Touch Platform",
+                "UTM Source", "UTM Campaign", "UTM Medium", "UTM Ad", "UTM Ad Type", "Device"
+            ]]
+            service.spreadsheets().values().update(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                range="'Purchase Log'!A1",
+                valueInputOption="RAW",
+                body={"values": headers},
+            ).execute()
+    except Exception as e:
+        print(f"  Error creating Purchase Log tab: {e}")
+        return
+
+    # Build rows from purchase_details
+    rows = []
+    for p in summary["purchase_details"]:
+        net_value = round(p["order_value"] - p["refunded"], 2)
+        rows.append([
+            summary["report_date"],
+            p["customer_email"],
+            p["order_value"],
+            p["refunded"],
+            net_value,
+            " + ".join(p["items"]),
+            p["source_checkout_page"],
+            p["first_touch_source"],
+            p["first_touch_platform"],
+            p["campaign"],
+            p["ad_name"],
+            p["last_touch_source"],
+            p["last_touch_platform"],
+            p["utm_source"],
+            p["utm_campaign"],
+            p["utm_medium"],
+            p["utm_ad"],
+            p["utm_ad_type"],
+            p["device"],
+        ])
+
+    if rows:
+        service.spreadsheets().values().append(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range="'Purchase Log'!A:S",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    print(f"  {len(rows)} purchase records appended to Purchase Log")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -662,6 +741,10 @@ def main():
     # Output 3: Google Sheet metrics (with link to full report)
     print("Appending to Google Sheet...")
     append_to_sheet(summary, report_link)
+
+    # Output 4: Purchase Log (individual details in Sheet tab)
+    print("Appending purchase log...")
+    append_purchase_log(summary)
 
     print("Done!")
 
