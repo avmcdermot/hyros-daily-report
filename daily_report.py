@@ -410,28 +410,32 @@ OUTPUT FORMAT: You must return EMAIL-SAFE HTML. This is critical:
 - Use bgcolor attributes as backup for background colors
 - Use align="center" on wrapper tables
 
-Use the Benzinga brand color palette for a CLEAN, READABLE design:
-- Navy #000725: header banner and KPI row background ONLY
-- Surface #071A47: KPI card cells only
-- Amber #F07520: KPI numbers, key dollar figures, count badges, accent borders
-- Cool White #F8F9FB: MAIN page/email background — ALL content below the KPIs sits on this light background
-- Slate Blue #1B3D82: table header row backgrounds, section heading text
-- Steel Grey #5A6B7A: body text, footnotes, captions
-- Cool Silver #D7DADE: table borders, dividers
-- Light stripe #F0F1F3: alternating table row background
+Use the Benzinga dark theme with CLEAR visual hierarchy:
+- Page/email background: #000725 (deep navy) — the ENTIRE report is on this dark background
+- Content containers: #0A1E4A (slightly lighter navy) — used for ALL section containers, giving clear separation from the page background. Each section (Product Mix, UTM, etc.) gets its own container with this background, 12px border-radius, 1px solid #1B3D82 border, and 20px padding.
+- Table header rows: #1B3D82 (slate blue) — strong contrast from the container background
+- Table body rows: alternate between #0D2255 and #0A1E4A — subtle striping that's visible but not jarring
+- KPI cards: #071A47 with 1px solid #1B3D82 border
+- Amber #F07520: KPI numbers, dollar amounts, count badges, accent borders, section header left borders
+- White #F8F9FB: headings, table header text, KPI labels, key numbers
+- Light grey #B0B8C4: body text in tables, regular content
+- Steel grey #5A6B7A: footnotes, captions, muted text
+- Silver #D7DADE: used sparingly for emphasis text
 - Font: 'DM Sans', Arial, sans-serif
 
-DESIGN PRINCIPLE: Light and readable. The page background is LIGHT (#F8F9FB). Only the top header banner and KPI row use dark navy. All tables and sections below sit on the light background with dark text (#333333), clean borders, and subtle row striping. This is an EMAIL — readability is paramount.
+DESIGN PRINCIPLE: Full dark theme, but with CLEAR LAYERS. The page is #000725, containers are #0A1E4A with visible borders, table headers are #1B3D82. This creates 3 distinct depth levels so content doesn't blend together. Every section is wrapped in its own bordered container with padding and margin-bottom for breathing room.
 
 Layout rules:
-- Header banner: #000725 background, white text, amber accent line below
-- KPI cards: single <table> with one <tr>, 4 <td> cells (25% width each). #071A47 background, amber numbers, white labels. 8px cellspacing.
-- Section headers: #1B3D82 text, uppercase, letter-spacing:2px, 4px left border in amber. On the LIGHT (#F8F9FB) background.
-- Data tables: header row #1B3D82 with white text. Body rows alternate #FFFFFF and #F0F1F3. Text is #333333 (dark). Dollar amounts in #F07520 amber. Cell borders: 1px solid #D7DADE.
-- Badges/pills: display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Colors: Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — white text.
-- Count badges: #F07520 circle, white number inside
-- Positive metrics: #198754 green. Negative/refunds: #dc3545 red.
-- Footnotes: #5A6B7A italic, 12px
+- The entire email body: background #000725
+- Header banner: seamless with the page background, just text and an amber divider line
+- KPI cards: single <table>, one <tr>, 4 <td> cells (25% width). #071A47 background, 1px solid #1B3D82 border, 8px border-radius. Amber numbers, white labels. 8px cellspacing.
+- Section containers: each section (Product Mix, UTM, Source Pages, etc.) is wrapped in a <table> with bgcolor="#0A1E4A", 1px solid #1B3D82 border, 12px border-radius, 20px cellpadding. 24px margin-bottom between sections.
+- Section headers: #F8F9FB white text, uppercase, letter-spacing:2px, with 4px left border in amber. INSIDE the container, not floating outside.
+- Data tables INSIDE containers: header row #1B3D82, body rows alternate #0D2255 / #0A1E4A. Text: #B0B8C4 for regular, #F8F9FB for important, #F07520 for dollar amounts. Cell borders: 1px solid rgba(27,61,130,0.5).
+- Badges/pills: display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — white text.
+- Count badges: #F07520 circle, #000725 dark number inside
+- Positive: #198754 green. Negative/refunds: #dc3545 red.
+- Footnotes: #5A6B7A italic, 12px, inside the container at bottom
 
 Product Mix table rules:
 - Columns: Product | Count | Revenue | % of Gross
