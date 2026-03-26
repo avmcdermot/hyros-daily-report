@@ -272,9 +272,15 @@ IMPORTANT CONTEXT:
 - "Source checkout page" = the landing page where the customer entered the funnel (e.g., /benzinga-edge-5). Upgrade and thank-you pages are excluded.
 - This report covers only NEW subscriptions (not recurring renewals).
 
-OUTPUT FORMAT: You must return a complete, self-contained HTML document with inline CSS styling. The report should look professional and be easy to scan.
+OUTPUT FORMAT: You must return EMAIL-SAFE HTML. This is critical:
+- Use ONLY HTML tables for ALL layout (no flexbox, no grid, no CSS float — these break in Gmail)
+- ALL styles must be INLINE on each element (no <style> blocks — Gmail strips them)
+- Wrap everything in a centered table with max-width: 640px
+- Use cellpadding, cellspacing, and border attributes on tables
+- Use bgcolor attributes as backup for background colors
+- Use align="center" on wrapper tables
 
-Use the Benzinga brand design system with these EXACT colors and fonts:
+Use the Benzinga brand design system with these EXACT colors:
 - Navy (background): #000725
 - Surface (cards/sections): #071A47
 - Amber (accent/highlights): #F07520
@@ -282,28 +288,29 @@ Use the Benzinga brand design system with these EXACT colors and fonts:
 - Blue (secondary): #1B3D82
 - Grey (muted text): #5A6B7A
 - Silver (borders/dividers): #D7DADE
-- Font: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif
+- Font: 'DM Sans', Arial, sans-serif
 - Body background: #020B1A
 - Text color: #B0B8C4 for body, #FFFFFF for headings and key numbers
-- KPI cards: #071A47 background with amber (#F07520) large bold numbers, arranged in a horizontal row
-- Tables: #071A47 background, alternating rows with #000725, white text, amber for important numbers
-- Section headers: use uppercase letter-spacing labels in grey, with amber left-border accent (4px solid #F07520)
-- Badges/pills for platforms: Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A with white text
+
+Layout rules:
+- KPI cards: Use a single <table> with one <tr> containing 4 <td> cells side-by-side (25% width each). Each cell: #071A47 background, amber (#F07520) large bold number, white label text above, grey description below. Add 8px cellspacing between them.
+- Data tables: #071A47 background, alternating row colors (#071A47 / #000725), white text, amber for dollar amounts. Use proper <table> with <thead> and <tbody>.
+- Section headers: uppercase letter-spacing in grey, with a left border (use a nested table with a 4px wide amber cell).
+- Badges/pills: Use inline <span> with display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — all with white text.
 - Positive metrics in #198754 (green), negative/refunds in #dc3545 (red)
-- Links and highlights in amber #F07520
 
 Structure:
-1. Header with report date and Edge logo placeholder
-2. KPI row: Purchases | Revenue | AOV | Net Revenue
+1. Header banner: navy background with "Benzinga EDGE · DAILY REPORT" text, report date, "New Subscriptions Only" subtitle
+2. KPI row (4 cells in one table row): Purchases | Gross Revenue | AOV | Net Revenue
 3. Product Mix table
 4. Source Checkout Pages table (which landing pages drove purchases)
 5. Attribution: First Touch breakdown (platform + campaign with revenue)
 6. Ad Creative Performance table (ad name, campaign, platform, purchases, revenue)
 7. Last Touch breakdown
 8. Individual Purchase Details table (email, order value, items, source page, first touch, ad)
-9. Notable Patterns & Actionable Insights section
+9. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
 
-Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs, then drill into tables as needed. Keep written analysis concise and punchy."""
+Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs. Keep written analysis to 2-3 punchy bullet points max."""
 
 
 def analyze_with_claude(summary):
