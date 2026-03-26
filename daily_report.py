@@ -21,83 +21,71 @@ from googleapiclient.discovery import build
 HYROS_API_KEY = os.environ.get("HYROS_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-GOOGLE_DOC_ID = os.environ.get("GOOGLE_DOC_ID")
-# Supports multiple tags separated by commas, e.g. "#benzinga-edge-month-19,#benzinga-edge-year-199"
-_raw_tags = os.environ.get("HYROS_PRODUCT_TAG", "#edge").strip()
-HYROS_PRODUCT_TAGS = [tag.strip() for tag in _raw_tags.split(",") if tag.strip()]
+GOOGLE_DOC_ID = os.environ.get("GOOGLE_DOC_ID", "").strip()
 
 HYROS_BASE_URL = "https://api.hyros.com/v1/api/v1.0"
+
+# US Eastern timezone (UTC-5 / UTC-4 during DST)
+US_EASTERN = timezone(timedelta(hours=-4))  # EDT (March-November)
 
 
 # ---------------------------------------------------------------------------
 # Step 1: Pull sales data from Hyros
 # ---------------------------------------------------------------------------
 def get_yesterday_range():
-    """Return yesterday's start and end timestamps in ISO 8601."""
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_start = today - timedelta(days=1)
-    yesterday_end = today - timedelta(seconds=1)
+    """Return yesterday's start and end timestamps in US Eastern time."""
+    now_eastern = datetime.now(US_EASTERN)
+    today_eastern = now_eastern.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_eastern - timedelta(days=1)
+    yesterday_end = today_eastern - timedelta(seconds=1)
     return yesterday_start.isoformat(), yesterday_end.isoformat()
 
 
-def fetch_hyros_sales(from_date, to_date):
-    """Fetch all Edge sales from Hyros for the given date range (handles pagination and multiple product tags)."""
+def fetch_all_sales(from_date, to_date):
+    """Fetch ALL sales from Hyros for the given date range, then filter for Edge."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
     all_sales = []
+    page_id = None
 
-    # Hyros accepts up to 20 product tags per request, so batch them
-    # Format: productTags="tag1","tag2","tag3"
-    batch_size = 20
-    for i in range(0, len(HYROS_PRODUCT_TAGS), batch_size):
-        batch = HYROS_PRODUCT_TAGS[i:i + batch_size]
-        tags_param = ",".join(f'"{tag}"' for tag in batch)
+    while True:
+        params = {
+            "fromDate": from_date,
+            "toDate": to_date,
+            "pageSize": 250,
+        }
+        if page_id:
+            params["pageId"] = page_id
 
-        page_id = None
-        while True:
-            params = {
-                "productTags": tags_param,
-                "fromDate": from_date,
-                "toDate": to_date,
-                "pageSize": 250,
-            }
-            if page_id:
-                params["pageId"] = page_id
+        resp = requests.get(f"{HYROS_BASE_URL}/sales", headers=headers, params=params, timeout=30)
+        if resp.status_code != 200:
+            print(f"  Hyros API error {resp.status_code}: {resp.text}")
+            resp.raise_for_status()
+        data = resp.json()
 
-            print(f"  Requesting batch {i // batch_size + 1} ({len(batch)} tags)...")
-            resp = requests.get(f"{HYROS_BASE_URL}/sales", headers=headers, params=params, timeout=30)
-            if resp.status_code != 200:
-                print(f"  Hyros API error {resp.status_code}: {resp.text}")
-                resp.raise_for_status()
-            data = resp.json()
+        sales = data.get("result", [])
+        all_sales.extend(sales)
 
-            sales = data.get("result", [])
-            all_sales.extend(sales)
+        page_id = data.get("nextPageId")
+        if not page_id or not sales:
+            break
 
-            page_id = data.get("nextPageId")
-            if not page_id or not sales:
-                break
+    # Filter for Edge products client-side
+    edge_sales = []
+    for sale in all_sales:
+        product = sale.get("product", {})
+        name = (product.get("name") or "").lower()
+        tag = (product.get("tag") or "").lower()
+        if "edge" in name or "edge" in tag:
+            edge_sales.append(sale)
 
-    return all_sales
-
-
-def fetch_hyros_calls(from_date, to_date):
-    """Fetch calls from Hyros for the given date range."""
-    headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
-    params = {"fromDate": from_date, "toDate": to_date, "pageSize": 250}
-
-    try:
-        resp = requests.get(f"{HYROS_BASE_URL}/calls", headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json().get("result", [])
-    except Exception:
-        # Calls endpoint may not be available on all plans
-        return []
+    print(f"  Total sales from Hyros: {len(all_sales)}, Edge sales: {len(edge_sales)}")
+    return edge_sales
 
 
 # ---------------------------------------------------------------------------
 # Step 2: Summarize raw data into a structured digest
 # ---------------------------------------------------------------------------
-def build_data_summary(sales, calls, report_date):
+def build_data_summary(sales, report_date):
     """Build a structured summary from raw Hyros data for Claude to analyze."""
     total_revenue = 0
     total_refunded = 0
@@ -188,7 +176,6 @@ def build_data_summary(sales, calls, report_date):
         "revenue_by_product": dict(sorted(products.items(), key=lambda x: x[1], reverse=True)),
         "first_touch_sources": dict(sorted(sources_first.items(), key=lambda x: x[1], reverse=True)),
         "last_touch_sources": dict(sorted(sources_last.items(), key=lambda x: x[1], reverse=True)),
-        "total_calls": len(calls),
         "sale_details": sale_details,
     }
 
@@ -198,7 +185,7 @@ def build_data_summary(sales, calls, report_date):
 # ---------------------------------------------------------------------------
 # Step 3: Send to Claude for analysis
 # ---------------------------------------------------------------------------
-CLAUDE_SYSTEM_PROMPT = """You are a senior marketing analyst creating a daily performance report for the "Edge" product.
+CLAUDE_SYSTEM_PROMPT = """You are a senior marketing analyst creating a daily performance report for the "Edge" product by Benzinga.
 
 Your report should be clear, actionable, and written for a business owner — not a data scientist. Use plain language.
 
@@ -223,6 +210,9 @@ Break down by platform (Facebook, Google, etc.) and top campaigns. Show revenue 
 
 ### Last Touch Attribution
 Same breakdown but for last-touch — what was the final touchpoint before purchase.
+
+## Product Mix
+Break down sales by product variant (monthly, annual, 3-year, upgrades, etc.).
 
 ## Notable Patterns
 Anything interesting: which campaigns are performing best, any red flags (high refunds, drop in a channel), mix of recurring vs new.
@@ -314,24 +304,21 @@ def main():
         print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
         sys.exit(1)
 
-    print(f"Using {len(HYROS_PRODUCT_TAGS)} product tags")
-
-    # Get yesterday's date range
+    # Get yesterday's date range (US Eastern)
     from_date, to_date = get_yesterday_range()
-    yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%B %d, %Y")
+    now_eastern = datetime.now(US_EASTERN)
+    yesterday_eastern = now_eastern - timedelta(days=1)
+    yesterday_str = yesterday_eastern.strftime("%B %d, %Y")
     print(f"Generating Edge report for {yesterday_str}...")
+    print(f"  Date range: {from_date} to {to_date}")
 
-    # Pull data from Hyros
+    # Pull data from Hyros (all sales, filtered client-side for Edge)
     print("Fetching sales from Hyros...")
-    sales = fetch_hyros_sales(from_date, to_date)
-    print(f"  Found {len(sales)} sales")
-
-    print("Fetching calls from Hyros...")
-    calls = fetch_hyros_calls(from_date, to_date)
-    print(f"  Found {len(calls)} calls")
+    sales = fetch_all_sales(from_date, to_date)
+    print(f"  Edge sales: {len(sales)}")
 
     # Build summary
-    summary = build_data_summary(sales, calls, yesterday_str)
+    summary = build_data_summary(sales, yesterday_str)
     print(f"  Total revenue: ${summary['total_revenue']:,.2f}")
 
     # Analyze with Claude
