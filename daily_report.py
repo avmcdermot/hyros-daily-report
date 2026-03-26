@@ -484,6 +484,7 @@ def analyze_with_claude(summary):
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=32768,
+        timeout=600,
         system=CLAUDE_SYSTEM_PROMPT,
         messages=[
             {
