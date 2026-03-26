@@ -183,6 +183,43 @@ def fetch_customer_click_data(email):
 # ---------------------------------------------------------------------------
 # Step 2: Build summary (grouped by customer)
 # ---------------------------------------------------------------------------
+def get_product_display_name(sale):
+    """Map Hyros product names to readable display names using price and tag."""
+    product = sale.get("product", {})
+    name = product.get("name", "unknown")
+    tag = (product.get("tag") or "").lower()
+    price = sale.get("price", {}).get("price", 0) or 0
+
+    name_lower = name.lower()
+
+    if "trade" in name_lower or "trade-alerts" in tag:
+        return "Trade Alerts Upsell"
+    if "3-year" in name_lower or "3-year-upg" in tag:
+        return "Benzinga Edge 3-Year Upgrade"
+    if "2-year" in name_lower or "2-year" in tag:
+        return "Benzinga Edge 2-Year Upgrade"
+    if "79-year" in tag:
+        return "Benzinga Edge Annual $79"
+    if "year-129" in tag:
+        return "Benzinga Edge Annual $129"
+    if "year-199" in tag or ("annual" in tag and "199" in tag):
+        return "Benzinga Edge Annual $199"
+    if "month" in tag or price == 19:
+        return "Benzinga Edge Monthly $19"
+    if "7-day" in tag or "trial" in tag or price == 19:
+        return "Benzinga Edge 7-Day Trial"
+
+    # Fallback: use price to differentiate
+    if price <= 19:
+        return f"Benzinga Edge Trial/Monthly (${price})"
+    elif price <= 99:
+        return f"Benzinga Edge Annual (${price})"
+    elif price <= 199:
+        return f"Benzinga Edge Annual ${price}"
+    else:
+        return f"{name} (${price})"
+
+
 def build_data_summary(sales, report_date):
     # Group by customer
     customers = {}
@@ -202,7 +239,7 @@ def build_data_summary(sales, report_date):
         refunded = price_info.get("refunded", 0) or 0
 
         customers[email]["line_items"].append({
-            "product": sale.get("product", {}).get("name", "unknown"),
+            "product": get_product_display_name(sale),
             "revenue": revenue,
             "refunded": refunded,
         })
@@ -373,24 +410,28 @@ OUTPUT FORMAT: You must return EMAIL-SAFE HTML. This is critical:
 - Use bgcolor attributes as backup for background colors
 - Use align="center" on wrapper tables
 
-Use the Benzinga brand design system with these EXACT colors:
-- Navy (background): #000725
-- Surface (cards/sections): #071A47
-- Amber (accent/highlights): #F07520
-- White (text): #F8F9FB
-- Blue (secondary): #1B3D82
-- Grey (muted text): #5A6B7A
-- Silver (borders/dividers): #D7DADE
+Use the Benzinga brand color palette for a CLEAN, READABLE design:
+- Navy #000725: header banner and KPI row background ONLY
+- Surface #071A47: KPI card cells only
+- Amber #F07520: KPI numbers, key dollar figures, count badges, accent borders
+- Cool White #F8F9FB: MAIN page/email background — ALL content below the KPIs sits on this light background
+- Slate Blue #1B3D82: table header row backgrounds, section heading text
+- Steel Grey #5A6B7A: body text, footnotes, captions
+- Cool Silver #D7DADE: table borders, dividers
+- Light stripe #F0F1F3: alternating table row background
 - Font: 'DM Sans', Arial, sans-serif
-- Body background: #020B1A
-- Text color: #B0B8C4 for body, #FFFFFF for headings and key numbers
+
+DESIGN PRINCIPLE: Light and readable. The page background is LIGHT (#F8F9FB). Only the top header banner and KPI row use dark navy. All tables and sections below sit on the light background with dark text (#333333), clean borders, and subtle row striping. This is an EMAIL — readability is paramount.
 
 Layout rules:
-- KPI cards: Use a single <table> with one <tr> containing 4 <td> cells side-by-side (25% width each). Each cell: #071A47 background, amber (#F07520) large bold number, white label text above, grey description below. Add 8px cellspacing between them.
-- Data tables: #071A47 background, alternating row colors (#071A47 / #000725), white text, amber for dollar amounts. Use proper <table> with <thead> and <tbody>.
-- Section headers: uppercase letter-spacing in grey, with a left border (use a nested table with a 4px wide amber cell).
-- Badges/pills: Use inline <span> with display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — all with white text.
-- Positive metrics in #198754 (green), negative/refunds in #dc3545 (red)
+- Header banner: #000725 background, white text, amber accent line below
+- KPI cards: single <table> with one <tr>, 4 <td> cells (25% width each). #071A47 background, amber numbers, white labels. 8px cellspacing.
+- Section headers: #1B3D82 text, uppercase, letter-spacing:2px, 4px left border in amber. On the LIGHT (#F8F9FB) background.
+- Data tables: header row #1B3D82 with white text. Body rows alternate #FFFFFF and #F0F1F3. Text is #333333 (dark). Dollar amounts in #F07520 amber. Cell borders: 1px solid #D7DADE.
+- Badges/pills: display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Colors: Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — white text.
+- Count badges: #F07520 circle, white number inside
+- Positive metrics: #198754 green. Negative/refunds: #dc3545 red.
+- Footnotes: #5A6B7A italic, 12px
 
 Product Mix table rules:
 - Columns: Product | Count | Revenue | % of Gross
@@ -438,7 +479,7 @@ def analyze_with_claude(summary):
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=8192,
+        max_tokens=16384,
         system=CLAUDE_SYSTEM_PROMPT,
         messages=[
             {
