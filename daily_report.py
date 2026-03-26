@@ -193,6 +193,7 @@ def build_data_summary(sales, report_date):
     campaigns = {}
     products = {}
     source_pages = {}
+    ad_creatives = {}  # ad name -> {purchases, revenue}
     purchase_details = []
 
     for email, cust in customers.items():
@@ -215,6 +216,16 @@ def build_data_summary(sales, report_date):
             if cat:
                 camp_name = cat.get("name", "unknown")
                 campaigns[camp_name] = campaigns.get(camp_name, 0) + order_value
+
+            # Ad creative tracking
+            ad_info = first_source.get("sourceLinkAd", {})
+            if ad_info:
+                ad_name = ad_info.get("name", "unknown")
+                if ad_name and ad_name != "unknown":
+                    if ad_name not in ad_creatives:
+                        ad_creatives[ad_name] = {"purchases": 0, "revenue": 0, "campaign": cat.get("name", "N/A") if cat else "N/A", "platform": ts.get("name", "N/A") if ts else "N/A"}
+                    ad_creatives[ad_name]["purchases"] += 1
+                    ad_creatives[ad_name]["revenue"] += order_value
 
         # Product breakdown (per line item)
         for item in cust["line_items"]:
@@ -260,6 +271,7 @@ def build_data_summary(sales, report_date):
         "revenue_by_campaign": dict(sorted(campaigns.items(), key=lambda x: x[1], reverse=True)),
         "revenue_by_product": dict(sorted(products.items(), key=lambda x: x[1], reverse=True)),
         "source_checkout_pages": dict(sorted(source_pages.items(), key=lambda x: x[1], reverse=True)),
+        "ad_creatives": dict(sorted(ad_creatives.items(), key=lambda x: x[1]["revenue"], reverse=True)),
         "purchase_details": purchase_details,
     }
 
@@ -303,8 +315,11 @@ Break down by platform and campaign. Show revenue per source.
 ### Last Touch
 Final touchpoint before purchase.
 
+## Ad Creative Performance
+Show which specific ad creatives drove purchases. Include the ad name, campaign it belongs to, platform, number of purchases, and revenue. This is critical for knowing which ads to scale and which to cut. If a purchase came from organic/unattributed traffic (no ad creative), note that separately.
+
 ## Notable Patterns & Actionable Insights
-Combine patterns and 2-3 concrete recommendations into one section.
+Combine patterns and 2-3 concrete recommendations into one section. Include ad-level recommendations when the data supports it (e.g., "Scale ad X — it drove Y purchases at $Z AOV").
 
 Keep the tone professional but conversational. Use dollar amounts and percentages."""
 
