@@ -483,7 +483,7 @@ def analyze_with_claude(summary):
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=16384,
+        max_tokens=32768,
         system=CLAUDE_SYSTEM_PROMPT,
         messages=[
             {
