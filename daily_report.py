@@ -305,6 +305,9 @@ def build_data_summary(sales, report_date):
             utm_ads[utm_ad]["purchases"] += 1
             utm_ads[utm_ad]["revenue"] += order_value
 
+        # Also track utm_adType as a separate breakdown
+        utm_ad_type = utms.get("utm_adType", "") or utms.get("utm_ad_type", "")
+
         last_source = cust["last_source"]
         purchase_details.append({
             "customer_email": email,
@@ -321,7 +324,9 @@ def build_data_summary(sales, report_date):
             "source_checkout_page": urlparse(page).path if page else "N/A",
             "utm_source": utms.get("utm_source", "N/A"),
             "utm_campaign": utms.get("utm_campaign", "N/A"),
+            "utm_medium": utms.get("utm_medium", "N/A"),
             "utm_ad": utms.get("utm_ad", "N/A"),
+            "utm_ad_type": utm_ad_type or "N/A",
             "device": device,
         })
 
@@ -392,9 +397,9 @@ Product Mix table rules:
 - The "Count" column should show a small amber (#F07520) circular badge with the number inside (display:inline-block, width:28px, height:28px, line-height:28px, text-align:center, border-radius:50%, background:#F07520, color:#000725, font-weight:bold, font-size:13px)
 
 UTM Breakdown table rules:
-- Show three sub-tables if data exists: UTM Campaigns, UTM Sources, UTM Ads
+- Show three sub-tables: UTM Campaigns, UTM Sources, UTM Ads
 - Each sub-table: columns are Name | Purchases | Revenue
-- Only show sub-tables that have data (skip empty ones)
+- IMPORTANT: You MUST render all data rows from the utm_campaigns, utm_sources, and utm_ads objects. Do NOT skip data or show empty tables. Each key in these objects is a row.
 
 Device split: show a small inline note near the KPIs or below them, e.g. "Mobile: 6 | Desktop: 5"
 
@@ -404,12 +409,26 @@ Structure:
 3. Device split (small text below KPIs)
 4. Product Mix table (with count badges)
 5. Source Checkout Pages table (which landing pages drove purchases)
-6. UTM Breakdown (utm_campaign, utm_source, utm_ad tables — between Source Pages and First Touch)
-7. Attribution: First Touch breakdown (platform + campaign with revenue)
-8. Ad Creative Performance table (ad name, campaign, platform, purchases, revenue)
-9. Last Touch breakdown
-10. Individual Purchase Details table (email, order value, items, source page, first touch, utm_campaign, utm_ad, device)
-11. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
+6. UTM Breakdown (utm_campaign, utm_source, utm_ad tables — MUST show all rows with data)
+7. Attribution: First Touch breakdown (platform + campaign with revenue) — MUST include this section
+8. Attribution: Last Touch breakdown — MUST include this section
+9. Individual Purchase Details table (email, order value, items, source page, first touch, utm_campaign, utm_ad, utm_ad_type, device)
+10. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
+
+CRITICAL: You must include ALL sections listed above. Do not skip or omit any section even if the data seems sparse.
+
+Contextual footnotes:
+- Below EVERY data table, add a small italic grey (#5A6B7A) footnote with useful context. Examples:
+  - Source Checkout Pages: "* X purchases had no trackable checkout page (direct/unknown entry)" if some are N/A
+  - UTM tables: "* X purchases had no UTM data (direct traffic or untagged links)" if some customers lack UTMs
+  - First Touch: "* Based on Hyros first-click attribution model"
+  - Product Mix: if there are refunds, add a footnote like "* 1 refund of $129 on Annual $199 (angelamagno516@yahoo.com)" with the specific details
+- These footnotes add crucial context. Always include them.
+
+Refund handling:
+- In the Product Mix table, if a product has a refund, show a small red "REFUNDED" badge or strikethrough on that row
+- In the KPI section, the refund should be clearly called out under Gross Revenue (already doing this with "-$X refund")
+- In the Individual Purchase Details table, clearly mark refunded orders with a red "REFUNDED" badge
 
 Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs. Keep written analysis to 2-3 punchy bullet points max."""
 
