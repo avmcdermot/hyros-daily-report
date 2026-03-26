@@ -1,4 +1,4 @@
-```yaml
+
    name: Daily Hyros Edge Report
 
    on:
@@ -30,4 +30,4 @@
              GOOGLE_DOC_ID: ${{ secrets.GOOGLE_DOC_ID }}
              HYROS_PRODUCT_TAG: ${{ secrets.HYROS_PRODUCT_TAG }}
            run: python daily_report.py
-   ```
+ 
