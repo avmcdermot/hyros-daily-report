@@ -17,7 +17,6 @@ import anthropic
 import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaInMemoryUpload
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +25,6 @@ from googleapiclient.http import MediaInMemoryUpload
 HYROS_API_KEY = os.environ.get("HYROS_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 EMAIL_RECIPIENT = os.environ.get("EMAIL_RECIPIENT", "").strip()
@@ -363,38 +361,27 @@ def send_email(html_content, report_date):
 
 
 # ---------------------------------------------------------------------------
-# Step 4b: Save HTML to Google Drive
+# Step 4b: Save HTML report to repo (for GitHub Pages archive)
 # ---------------------------------------------------------------------------
-def save_to_drive(html_content, report_date):
-    if not GOOGLE_DRIVE_FOLDER_ID:
-        print("  Google Drive not configured. Skipping.")
-        return
-
-    creds_json = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    creds = service_account.Credentials.from_service_account_info(
-        creds_json, scopes=["https://www.googleapis.com/auth/drive.file"]
-    )
-    service = build("drive", "v3", credentials=creds)
-
-    filename = f"Edge Report - {report_date}.html"
-    file_metadata = {
-        "name": filename,
-        "parents": [GOOGLE_DRIVE_FOLDER_ID],
-        "mimeType": "text/html",
-    }
-    media = MediaInMemoryUpload(html_content.encode("utf-8"), mimetype="text/html")
-
-    file = service.files().create(
-        body=file_metadata, media_body=media, fields="id,webViewLink"
-    ).execute()
-
-    print(f"  Saved to Drive: {file.get('webViewLink', file.get('id'))}")
+def save_report_file(html_content, report_date):
+    """Save HTML report to docs/reports/ for GitHub Pages hosting."""
+    import re
+    date_slug = re.sub(r'[^a-zA-Z0-9]+', '-', report_date).strip('-').lower()
+    filepath = f"docs/reports/{date_slug}.html"
+    os.makedirs("docs/reports", exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"  Saved report to {filepath}")
+    return filepath, date_slug
 
 
 # ---------------------------------------------------------------------------
 # Step 4c: Append metrics row to Google Sheet
 # ---------------------------------------------------------------------------
-def append_to_sheet(summary):
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "avmcdermot/hyros-daily-report")
+
+
+def append_to_sheet(summary, report_link=""):
     if not GOOGLE_SHEET_ID:
         print("  Google Sheet not configured. Skipping.")
         return
@@ -412,10 +399,10 @@ def append_to_sheet(summary):
     existing = result.get("values", [])
 
     if not existing:
-        # Write header row first
         headers = [[
             "Date", "Purchases", "Revenue", "Net Revenue", "AOV",
-            "Refunded", "Top Source Page", "Top Platform", "Top Campaign", "Top Ad Creative"
+            "Refunded", "Top Source Page", "Top Platform", "Top Campaign",
+            "Top Ad Creative", "Full Report"
         ]]
         service.spreadsheets().values().update(
             spreadsheetId=GOOGLE_SHEET_ID,
@@ -424,7 +411,6 @@ def append_to_sheet(summary):
             body={"values": headers},
         ).execute()
 
-    # Build data row
     top_source = list(summary["source_checkout_pages"].keys())[0] if summary["source_checkout_pages"] else "N/A"
     top_platform = list(summary["revenue_by_platform"].keys())[0] if summary["revenue_by_platform"] else "N/A"
     top_campaign = list(summary["revenue_by_campaign"].keys())[0] if summary["revenue_by_campaign"] else "N/A"
@@ -441,11 +427,12 @@ def append_to_sheet(summary):
         top_platform,
         top_campaign,
         top_ad,
+        report_link,
     ]]
 
     service.spreadsheets().values().append(
         spreadsheetId=GOOGLE_SHEET_ID,
-        range="A:J",
+        range="A:K",
         valueInputOption="RAW",
         insertDataOption="INSERT_ROWS",
         body={"values": row},
@@ -499,17 +486,14 @@ def main():
     print("Sending email...")
     send_email(html_report, yesterday_str)
 
-    # Output 2: Google Drive archive (optional, may fail for service accounts)
-    if GOOGLE_DRIVE_FOLDER_ID:
-        print("Saving to Google Drive...")
-        try:
-            save_to_drive(html_report, yesterday_str)
-        except Exception as e:
-            print(f"  Drive save skipped (non-fatal): {e}")
+    # Output 2: Save HTML file to repo (for GitHub Pages archive)
+    print("Saving report file...")
+    filepath, date_slug = save_report_file(html_report, yesterday_str)
+    report_link = f"https://{GITHUB_REPO.split('/')[0]}.github.io/{GITHUB_REPO.split('/')[1]}/reports/{date_slug}.html"
 
-    # Output 3: Google Sheet metrics
+    # Output 3: Google Sheet metrics (with link to full report)
     print("Appending to Google Sheet...")
-    append_to_sheet(summary)
+    append_to_sheet(summary, report_link)
 
     print("Done!")
 
