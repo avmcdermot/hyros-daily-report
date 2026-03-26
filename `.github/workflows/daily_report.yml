@@ -1,5 +1,4 @@
-
-   name: Daily Hyros Edge Report
+ name: Daily Hyros Edge Report
 
    on:
      schedule:
