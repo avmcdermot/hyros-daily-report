@@ -492,9 +492,13 @@ def main():
     print("Sending email...")
     send_email(html_report, yesterday_str)
 
-    # Output 2: Google Drive archive
-    print("Saving to Google Drive...")
-    save_to_drive(html_report, yesterday_str)
+    # Output 2: Google Drive archive (optional, may fail for service accounts)
+    if GOOGLE_DRIVE_FOLDER_ID:
+        print("Saving to Google Drive...")
+        try:
+            save_to_drive(html_report, yesterday_str)
+        except Exception as e:
+            print(f"  Drive save skipped (non-fatal): {e}")
 
     # Output 3: Google Sheet metrics
     print("Appending to Google Sheet...")
