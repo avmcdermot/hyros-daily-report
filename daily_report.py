@@ -102,16 +102,36 @@ def fetch_new_edge_sales(from_date, to_date):
         if not page_id or not sales:
             break
 
+    # Step 1: Find Edge customers and their sales
     edge_sales = []
+    edge_customers = set()
     for sale in all_sales:
         product = sale.get("product", {})
         name = (product.get("name") or "").lower()
         tag = (product.get("tag") or "").lower()
         if "edge" in name or "edge" in tag:
             edge_sales.append(sale)
+            email = sale.get("lead", {}).get("email", "")
+            if email:
+                edge_customers.add(email)
 
-    print(f"  Total non-recurring sales: {len(all_sales)}, Edge line items: {len(edge_sales)}")
-    return edge_sales
+    # Step 2: Find Trade Alerts upsells by those same Edge customers
+    upsell_sales = []
+    for sale in all_sales:
+        email = sale.get("lead", {}).get("email", "")
+        if email not in edge_customers:
+            continue
+        product = sale.get("product", {})
+        name = (product.get("name") or "").lower()
+        tag = (product.get("tag") or "").lower()
+        if "trade" in name or "trade-alerts" in tag:
+            # Avoid duplicates (in case it was already captured)
+            if sale not in edge_sales:
+                upsell_sales.append(sale)
+
+    combined = edge_sales + upsell_sales
+    print(f"  Total non-recurring sales: {len(all_sales)}, Edge line items: {len(edge_sales)}, Trade Alerts upsells: {len(upsell_sales)}")
+    return combined
 
 
 def fetch_source_checkout_page(email):
