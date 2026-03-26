@@ -28,6 +28,41 @@ HYROS_BASE_URL = "https://api.hyros.com/v1/api/v1.0"
 # US Eastern timezone (UTC-4 during EDT, UTC-5 during EST)
 US_EASTERN = timezone(timedelta(hours=-4))  # EDT (March-November)
 
+# Primary checkout pages (source/entry pages) — these are where traffic lands.
+# Upgrade pages, thank-you pages, and upsell pages are excluded.
+PRIMARY_CHECKOUT_PATHS = [
+    "/premium/ideas/benzinga-edge-3",
+    "/premium/ideas/benzinga-edge-4",
+    "/premium/ideas/benzinga-edge-5",
+    "/premium/ideas/benzinga-edge-2/",
+    "/premium/ideas/benzinga-edge-report-2/",
+    "/premium/ideas/benzinga-edge-memorial-day-special",
+    "/premium/ideas/benzinga-edge-ranking",
+    "/premium/ideas/benzinga-edge-ranking-checkout/",
+    "/premium/ideas/benzinga-edge-trial-30-days/",
+    "/premium/ideas/benzinga-edge-trial-report/",
+    "/premium/ideas/benzinga-edge-trial-30-days-report/",
+    "/premium/ideas/benzinga-edge-trial",
+    "/premium/ideas/benzinga-edge-cheatsheet/",
+    "/premium/ideas/benzinga-edge-cheatsheet-2/",
+    "/premium/ideas/get-3-years-of-edge/",
+    "/premium/ideas/edge-upgrade-to-1-year-offer-checkout/",
+    "/edge/",
+]
+
+
+def is_source_checkout_page(url):
+    """Check if a URL is a primary checkout/source page (not an upgrade or thank-you)."""
+    from urllib.parse import urlparse
+    path = urlparse(url).path.rstrip("/") + "/"
+    # Normalize: strip trailing slash for comparison
+    path_clean = path.rstrip("/")
+    for p in PRIMARY_CHECKOUT_PATHS:
+        p_clean = p.rstrip("/")
+        if path_clean == p_clean or path_clean.startswith(p_clean):
+            return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Step 1: Pull NEW (non-recurring) sales data from Hyros
@@ -79,136 +114,153 @@ def fetch_new_edge_sales(from_date, to_date):
         if "edge" in name or "edge" in tag:
             edge_sales.append(sale)
 
-    print(f"  Total non-recurring sales: {len(all_sales)}, Edge: {len(edge_sales)}")
+    print(f"  Total non-recurring sales: {len(all_sales)}, Edge line items: {len(edge_sales)}")
     return edge_sales
 
 
-def fetch_landing_pages(emails):
-    """Fetch landing page URLs from lead clicks for each customer."""
+def fetch_source_checkout_page(email):
+    """Fetch click data for a customer and find their source checkout page (entry point)."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
-    landing_pages = {}
+    try:
+        resp = requests.get(
+            f"{HYROS_BASE_URL}/leads/clicks",
+            headers=headers,
+            params={"email": email, "pageSize": 50},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return None
+        clicks = resp.json().get("result", [])
 
-    for email in emails:
-        try:
-            resp = requests.get(
-                f"{HYROS_BASE_URL}/leads/clicks",
-                headers=headers,
-                params={"email": email, "pageSize": 50},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                continue
-            clicks = resp.json().get("result", [])
+        # Find the earliest click on a primary checkout page
+        source_page = None
+        for click in reversed(clicks):  # reversed = earliest first
+            page = click.get("page", "")
+            if page and is_source_checkout_page(page):
+                source_page = page
+                break  # Take the earliest/first source checkout page
 
-            # Collect unique landing pages (the 'page' field, without query params)
-            pages = []
-            for click in clicks:
-                page = click.get("page", "")
-                if page and "edge" in page.lower():
-                    pages.append(page)
-
-            if pages:
-                landing_pages[email] = list(dict.fromkeys(pages))  # dedupe, keep order
-        except Exception:
-            continue
-
-    return landing_pages
+        return source_page
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Summarize raw data into a structured digest
+# Step 2: Group sales by customer and build summary
 # ---------------------------------------------------------------------------
-def build_data_summary(sales, landing_pages, report_date):
-    """Build a structured summary from raw Hyros data for Claude to analyze."""
-    total_revenue = 0
-    total_refunded = 0
-    unique_customers = set()
-    sources_first = {}
-    sources_last = {}
-    platforms = {}
-    campaigns = {}
-    products = {}
-    landing_page_counts = {}
-    sale_details = []
+def build_data_summary(sales, report_date):
+    """Group sales by customer (1 customer = 1 purchase) and build summary."""
 
+    # Group line items by customer email
+    customers = {}
     for sale in sales:
+        email = sale.get("lead", {}).get("email", "unknown")
+        if email not in customers:
+            customers[email] = {
+                "email": email,
+                "line_items": [],
+                "total_order_value": 0,
+                "total_refunded": 0,
+                "first_source": sale.get("firstSource"),
+                "last_source": sale.get("lastSource"),
+            }
         price_info = sale.get("price", {})
         revenue = price_info.get("price", 0) or 0
         refunded = price_info.get("refunded", 0) or 0
 
-        total_revenue += revenue
+        customers[email]["line_items"].append({
+            "product": sale.get("product", {}).get("name", "unknown"),
+            "revenue": revenue,
+            "refunded": refunded,
+        })
+        customers[email]["total_order_value"] += revenue
+        customers[email]["total_refunded"] += refunded
+
+    # Fetch source checkout pages for each customer
+    print(f"Fetching source checkout pages for {len(customers)} customers...")
+    for email, cust in customers.items():
+        source_page = fetch_source_checkout_page(email)
+        cust["source_checkout_page"] = source_page
+        if source_page:
+            print(f"  {email}: {source_page}")
+        else:
+            print(f"  {email}: no source page found")
+
+    # Build aggregated metrics
+    total_revenue = 0
+    total_refunded = 0
+    platforms = {}
+    campaigns = {}
+    products = {}
+    source_pages = {}
+    purchase_details = []
+
+    for email, cust in customers.items():
+        order_value = cust["total_order_value"]
+        refunded = cust["total_refunded"]
+        total_revenue += order_value
         total_refunded += refunded
 
-        # Customer tracking
-        lead = sale.get("lead", {})
-        email = lead.get("email", "unknown")
-        unique_customers.add(email)
-
-        # First-touch attribution
-        first_source = sale.get("firstSource", {})
+        # Attribution from first sale's sources
+        first_source = cust["first_source"]
         if first_source:
-            src_name = first_source.get("name", "unknown")
-            sources_first[src_name] = sources_first.get(src_name, 0) + 1
-
             ts = first_source.get("trafficSource", {})
             if ts:
                 platform = ts.get("name", "unknown")
-                platforms[platform] = platforms.get(platform, 0) + revenue
+                is_organic = first_source.get("organic", False)
+                label = f"{platform} ({'organic' if is_organic else 'paid'})"
+                platforms[label] = platforms.get(label, 0) + order_value
 
             cat = first_source.get("category", {})
             if cat:
                 camp_name = cat.get("name", "unknown")
-                campaigns[camp_name] = campaigns.get(camp_name, 0) + revenue
+                campaigns[camp_name] = campaigns.get(camp_name, 0) + order_value
 
-            # Ad creative info
-            ad_info = first_source.get("sourceLinkAd", {})
+        # Product breakdown (per line item)
+        for item in cust["line_items"]:
+            prod = item["product"]
+            products[prod] = products.get(prod, 0) + item["revenue"]
 
-        # Last-touch attribution
-        last_source = sale.get("lastSource", {})
-        if last_source:
-            src_name = last_source.get("name", "unknown")
-            sources_last[src_name] = sources_last.get(src_name, 0) + 1
+        # Source checkout page
+        page = cust.get("source_checkout_page")
+        if page:
+            # Clean to just the path for readability
+            from urllib.parse import urlparse
+            path = urlparse(page).path
+            source_pages[path] = source_pages.get(path, 0) + 1
 
-        # Product breakdown
-        product = sale.get("product", {})
-        prod_name = product.get("name", "unknown")
-        products[prod_name] = products.get(prod_name, 0) + revenue
-
-        # Landing pages for this customer
-        customer_pages = landing_pages.get(email, [])
-        for page in customer_pages:
-            landing_page_counts[page] = landing_page_counts.get(page, 0) + 1
-
-        # Individual sale detail
-        sale_details.append({
-            "revenue": revenue,
-            "refunded": refunded,
+        # Build purchase detail
+        last_source = cust["last_source"]
+        purchase_details.append({
             "customer_email": email,
-            "first_source": first_source.get("name", "N/A") if first_source else "N/A",
-            "first_source_platform": first_source.get("trafficSource", {}).get("name", "N/A") if first_source else "N/A",
-            "first_source_organic": first_source.get("organic", None) if first_source else None,
+            "order_value": round(order_value, 2),
+            "refunded": round(refunded, 2),
+            "items": [item["product"] for item in cust["line_items"]],
+            "first_touch_source": first_source.get("name", "N/A") if first_source else "N/A",
+            "first_touch_platform": first_source.get("trafficSource", {}).get("name", "N/A") if first_source else "N/A",
+            "first_touch_organic": first_source.get("organic", None) if first_source else None,
             "campaign": first_source.get("category", {}).get("name", "N/A") if first_source else "N/A",
             "ad_name": first_source.get("sourceLinkAd", {}).get("name", "N/A") if first_source and first_source.get("sourceLinkAd") else "N/A",
-            "last_source": last_source.get("name", "N/A") if last_source else "N/A",
-            "last_source_platform": last_source.get("trafficSource", {}).get("name", "N/A") if last_source else "N/A",
-            "product": prod_name,
-            "landing_pages": customer_pages[:3],  # Top 3 landing pages
+            "last_touch_source": last_source.get("name", "N/A") if last_source else "N/A",
+            "last_touch_platform": last_source.get("trafficSource", {}).get("name", "N/A") if last_source else "N/A",
+            "source_checkout_page": cust.get("source_checkout_page", "N/A"),
         })
+
+    num_purchases = len(customers)
+    aov = round(total_revenue / num_purchases, 2) if num_purchases > 0 else 0
 
     summary = {
         "report_date": report_date,
-        "total_new_subscriptions": len(sales),
-        "unique_new_customers": len(unique_customers),
+        "total_purchases": num_purchases,
         "total_revenue": round(total_revenue, 2),
         "total_refunded": round(total_refunded, 2),
         "net_revenue": round(total_revenue - total_refunded, 2),
+        "average_order_value": aov,
         "revenue_by_platform": dict(sorted(platforms.items(), key=lambda x: x[1], reverse=True)),
         "revenue_by_campaign": dict(sorted(campaigns.items(), key=lambda x: x[1], reverse=True)),
         "revenue_by_product": dict(sorted(products.items(), key=lambda x: x[1], reverse=True)),
-        "first_touch_sources": dict(sorted(sources_first.items(), key=lambda x: x[1], reverse=True)),
-        "last_touch_sources": dict(sorted(sources_last.items(), key=lambda x: x[1], reverse=True)),
-        "landing_pages": dict(sorted(landing_page_counts.items(), key=lambda x: x[1], reverse=True)),
-        "sale_details": sale_details,
+        "source_checkout_pages": dict(sorted(source_pages.items(), key=lambda x: x[1], reverse=True)),
+        "purchase_details": purchase_details,
     }
 
     return summary
@@ -219,42 +271,40 @@ def build_data_summary(sales, landing_pages, report_date):
 # ---------------------------------------------------------------------------
 CLAUDE_SYSTEM_PROMPT = """You are a senior marketing analyst creating a daily performance report for NEW Edge subscriptions at Benzinga.
 
-IMPORTANT: This report covers only NEW subscriptions (not recurring renewals). Each line item is a new subscription purchase.
-
-Your report should be clear, actionable, and written for a business owner — not a data scientist. Use plain language.
+IMPORTANT CONTEXT:
+- Each "purchase" = one unique customer. A customer may buy an annual plan + a multi-year upgrade in one session — that counts as ONE purchase with a combined order value.
+- "Source checkout page" = the landing page where the customer entered the funnel (e.g., /benzinga-edge-5). Upgrade and thank-you pages are excluded.
+- This report covers only NEW subscriptions (not recurring renewals).
 
 Structure your report exactly like this:
 
 # Edge Daily Report — {date}
 
 ## Quick Summary
-A 2-3 sentence overview: total new subscriptions, unique customers, revenue, and the headline takeaway.
+2-3 sentences: total new purchases, revenue, AOV, and the headline takeaway.
 
 ## Key Metrics
-- New Subscriptions: X (line items)
-- Unique New Customers: X
+- New Purchases: X
 - Total Revenue: $X
 - Net Revenue (after refunds): $X
+- Average Order Value: $X
 - Refunds: $X
 
 ## Product Mix
-Break down new subscriptions by product variant (monthly, annual, 3-year, upgrades, etc.) with revenue for each.
+Break down by product variant with revenue. Note when customers bundle (e.g., Annual + 3-Year Upgrade).
+
+## Source Checkout Pages
+Which landing pages drove the new purchases. Show the page path and number of purchases from each.
 
 ## Attribution Breakdown
 ### First Touch (How They Found Us)
-Break down by platform (Facebook, Google, organic, etc.) and top campaigns/ad sets. Show revenue per source.
+Break down by platform and campaign. Show revenue per source.
 
-### Last Touch (Final Click Before Purchase)
-Same breakdown — what was the final touchpoint before purchase.
+### Last Touch
+Final touchpoint before purchase.
 
-## Landing Pages
-Show which landing page URLs drove the most new subscriptions. Include the full URL path.
-
-## Notable Patterns
-Anything interesting: which campaigns are performing best, which landing pages convert, mix of product types, any red flags.
-
-## Actionable Insights
-2-3 specific, actionable recommendations based on this data. Be concrete.
+## Notable Patterns & Actionable Insights
+Combine patterns and 2-3 concrete recommendations into one section.
 
 Keep the tone professional but conversational. Use dollar amounts and percentages."""
 
@@ -351,18 +401,12 @@ def main():
     # Pull NEW (non-recurring) Edge sales from Hyros
     print("Fetching new Edge subscriptions from Hyros...")
     sales = fetch_new_edge_sales(from_date, to_date)
-    print(f"  New Edge subscriptions: {len(sales)}")
 
-    # Fetch landing page data for each customer
-    emails = list(set(s.get("lead", {}).get("email", "") for s in sales if s.get("lead", {}).get("email")))
-    print(f"Fetching landing pages for {len(emails)} customers...")
-    landing_pages = fetch_landing_pages(emails)
-    print(f"  Found landing page data for {len(landing_pages)} customers")
-
-    # Build summary
-    summary = build_data_summary(sales, landing_pages, yesterday_str)
+    # Build summary (groups by customer, fetches source pages)
+    summary = build_data_summary(sales, yesterday_str)
+    print(f"  Total purchases: {summary['total_purchases']}")
     print(f"  Total revenue: ${summary['total_revenue']:,.2f}")
-    print(f"  Unique customers: {summary['unique_new_customers']}")
+    print(f"  AOV: ${summary['average_order_value']:,.2f}")
 
     # Analyze with Claude
     print("Analyzing data with Claude...")
