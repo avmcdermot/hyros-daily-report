@@ -22,7 +22,9 @@ HYROS_API_KEY = os.environ.get("HYROS_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_DOC_ID = os.environ.get("GOOGLE_DOC_ID")
-HYROS_PRODUCT_TAG = os.environ.get("HYROS_PRODUCT_TAG", "$edge")
+# Supports multiple tags separated by commas, e.g. "#benzinga-edge-month-19,#benzinga-edge-year-199"
+_raw_tags = os.environ.get("HYROS_PRODUCT_TAG", "#edge").strip()
+HYROS_PRODUCT_TAGS = [tag.strip() for tag in _raw_tags.split(",") if tag.strip()]
 
 HYROS_BASE_URL = "https://api.hyros.com/v1/api/v1.0"
 
@@ -39,31 +41,41 @@ def get_yesterday_range():
 
 
 def fetch_hyros_sales(from_date, to_date):
-    """Fetch all Edge sales from Hyros for the given date range (handles pagination)."""
+    """Fetch all Edge sales from Hyros for the given date range (handles pagination and multiple product tags)."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
     all_sales = []
-    page_id = None
 
-    while True:
-        params = {
-            "productTags": f'"{HYROS_PRODUCT_TAG}"',
-            "fromDate": from_date,
-            "toDate": to_date,
-            "pageSize": 250,
-        }
-        if page_id:
-            params["pageId"] = page_id
+    # Hyros accepts up to 20 product tags per request, so batch them
+    # Format: productTags="tag1","tag2","tag3"
+    batch_size = 20
+    for i in range(0, len(HYROS_PRODUCT_TAGS), batch_size):
+        batch = HYROS_PRODUCT_TAGS[i:i + batch_size]
+        tags_param = ",".join(f'"{tag}"' for tag in batch)
 
-        resp = requests.get(f"{HYROS_BASE_URL}/sales", headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        page_id = None
+        while True:
+            params = {
+                "productTags": tags_param,
+                "fromDate": from_date,
+                "toDate": to_date,
+                "pageSize": 250,
+            }
+            if page_id:
+                params["pageId"] = page_id
 
-        sales = data.get("result", [])
-        all_sales.extend(sales)
+            print(f"  Requesting batch {i // batch_size + 1} ({len(batch)} tags)...")
+            resp = requests.get(f"{HYROS_BASE_URL}/sales", headers=headers, params=params, timeout=30)
+            if resp.status_code != 200:
+                print(f"  Hyros API error {resp.status_code}: {resp.text}")
+                resp.raise_for_status()
+            data = resp.json()
 
-        page_id = data.get("nextPageId")
-        if not page_id or not sales:
-            break
+            sales = data.get("result", [])
+            all_sales.extend(sales)
+
+            page_id = data.get("nextPageId")
+            if not page_id or not sales:
+                break
 
     return all_sales
 
@@ -301,6 +313,8 @@ def main():
     if missing:
         print(f"ERROR: Missing required environment variables: {', '.join(missing)}")
         sys.exit(1)
+
+    print(f"Using {len(HYROS_PRODUCT_TAGS)} product tags")
 
     # Get yesterday's date range
     from_date, to_date = get_yesterday_range()
