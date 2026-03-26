@@ -1,35 +1,40 @@
 """
 Daily Hyros Edge Report Generator
 Pulls yesterday's NEW Edge subscription data from Hyros, analyzes it with Claude,
-and appends a report to a Google Doc.
+and outputs:
+  1. Styled HTML email to your inbox
+  2. HTML report saved to Google Drive (archive)
+  3. Key metrics row appended to Google Sheet (trend tracking)
 """
 
 import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import anthropic
 import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaInMemoryUpload
 
 
 # ---------------------------------------------------------------------------
-# Configuration (pulled from environment variables / GitHub Secrets)
+# Configuration
 # ---------------------------------------------------------------------------
 HYROS_API_KEY = os.environ.get("HYROS_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-GOOGLE_DOC_ID = os.environ.get("GOOGLE_DOC_ID", "").strip()
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+EMAIL_RECIPIENT = os.environ.get("EMAIL_RECIPIENT", "").strip()
 
 HYROS_BASE_URL = "https://api.hyros.com/v1/api/v1.0"
+US_EASTERN = timezone(timedelta(hours=-4))  # EDT
 
-# US Eastern timezone (UTC-4 during EDT, UTC-5 during EST)
-US_EASTERN = timezone(timedelta(hours=-4))  # EDT (March-November)
-
-# Primary checkout pages (source/entry pages) — these are where traffic lands.
-# Upgrade pages, thank-you pages, and upsell pages are excluded.
+# Primary checkout pages (entry points into the Edge funnel)
 PRIMARY_CHECKOUT_PATHS = [
     "/premium/ideas/benzinga-edge-3",
     "/premium/ideas/benzinga-edge-4",
@@ -52,23 +57,18 @@ PRIMARY_CHECKOUT_PATHS = [
 
 
 def is_source_checkout_page(url):
-    """Check if a URL is a primary checkout/source page (not an upgrade or thank-you)."""
-    from urllib.parse import urlparse
-    path = urlparse(url).path.rstrip("/") + "/"
-    # Normalize: strip trailing slash for comparison
-    path_clean = path.rstrip("/")
+    """Check if a URL is a primary checkout/source page."""
+    path = urlparse(url).path.rstrip("/")
     for p in PRIMARY_CHECKOUT_PATHS:
-        p_clean = p.rstrip("/")
-        if path_clean == p_clean or path_clean.startswith(p_clean):
+        if path == p.rstrip("/"):
             return True
     return False
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Pull NEW (non-recurring) sales data from Hyros
+# Step 1: Pull data from Hyros
 # ---------------------------------------------------------------------------
 def get_yesterday_range():
-    """Return yesterday's start and end timestamps in US Eastern time."""
     now_eastern = datetime.now(US_EASTERN)
     today_eastern = now_eastern.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_eastern - timedelta(days=1)
@@ -77,7 +77,6 @@ def get_yesterday_range():
 
 
 def fetch_new_edge_sales(from_date, to_date):
-    """Fetch only NEW (non-recurring) sales, then filter for Edge products."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
     all_sales = []
     page_id = None
@@ -105,7 +104,6 @@ def fetch_new_edge_sales(from_date, to_date):
         if not page_id or not sales:
             break
 
-    # Filter for Edge products
     edge_sales = []
     for sale in all_sales:
         product = sale.get("product", {})
@@ -119,7 +117,6 @@ def fetch_new_edge_sales(from_date, to_date):
 
 
 def fetch_source_checkout_page(email):
-    """Fetch click data for a customer and find their source checkout page (entry point)."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
     try:
         resp = requests.get(
@@ -132,26 +129,20 @@ def fetch_source_checkout_page(email):
             return None
         clicks = resp.json().get("result", [])
 
-        # Find the earliest click on a primary checkout page
-        source_page = None
-        for click in reversed(clicks):  # reversed = earliest first
+        for click in reversed(clicks):
             page = click.get("page", "")
             if page and is_source_checkout_page(page):
-                source_page = page
-                break  # Take the earliest/first source checkout page
-
-        return source_page
+                return page
+        return None
     except Exception:
         return None
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Group sales by customer and build summary
+# Step 2: Build summary (grouped by customer)
 # ---------------------------------------------------------------------------
 def build_data_summary(sales, report_date):
-    """Group sales by customer (1 customer = 1 purchase) and build summary."""
-
-    # Group line items by customer email
+    # Group by customer
     customers = {}
     for sale in sales:
         email = sale.get("lead", {}).get("email", "unknown")
@@ -176,24 +167,20 @@ def build_data_summary(sales, report_date):
         customers[email]["total_order_value"] += revenue
         customers[email]["total_refunded"] += refunded
 
-    # Fetch source checkout pages for each customer
+    # Fetch source pages
     print(f"Fetching source checkout pages for {len(customers)} customers...")
     for email, cust in customers.items():
         source_page = fetch_source_checkout_page(email)
         cust["source_checkout_page"] = source_page
-        if source_page:
-            print(f"  {email}: {source_page}")
-        else:
-            print(f"  {email}: no source page found")
 
-    # Build aggregated metrics
+    # Aggregate
     total_revenue = 0
     total_refunded = 0
     platforms = {}
     campaigns = {}
     products = {}
     source_pages = {}
-    ad_creatives = {}  # ad name -> {purchases, revenue}
+    ad_creatives = {}
     purchase_details = []
 
     for email, cust in customers.items():
@@ -202,7 +189,6 @@ def build_data_summary(sales, report_date):
         total_revenue += order_value
         total_refunded += refunded
 
-        # Attribution from first sale's sources
         first_source = cust["first_source"]
         if first_source:
             ts = first_source.get("trafficSource", {})
@@ -217,30 +203,28 @@ def build_data_summary(sales, report_date):
                 camp_name = cat.get("name", "unknown")
                 campaigns[camp_name] = campaigns.get(camp_name, 0) + order_value
 
-            # Ad creative tracking
             ad_info = first_source.get("sourceLinkAd", {})
             if ad_info:
-                ad_name = ad_info.get("name", "unknown")
-                if ad_name and ad_name != "unknown":
+                ad_name = ad_info.get("name", "")
+                if ad_name:
                     if ad_name not in ad_creatives:
-                        ad_creatives[ad_name] = {"purchases": 0, "revenue": 0, "campaign": cat.get("name", "N/A") if cat else "N/A", "platform": ts.get("name", "N/A") if ts else "N/A"}
+                        ad_creatives[ad_name] = {
+                            "purchases": 0, "revenue": 0,
+                            "campaign": cat.get("name", "N/A") if cat else "N/A",
+                            "platform": ts.get("name", "N/A") if ts else "N/A",
+                        }
                     ad_creatives[ad_name]["purchases"] += 1
                     ad_creatives[ad_name]["revenue"] += order_value
 
-        # Product breakdown (per line item)
         for item in cust["line_items"]:
             prod = item["product"]
             products[prod] = products.get(prod, 0) + item["revenue"]
 
-        # Source checkout page
         page = cust.get("source_checkout_page")
         if page:
-            # Clean to just the path for readability
-            from urllib.parse import urlparse
             path = urlparse(page).path
             source_pages[path] = source_pages.get(path, 0) + 1
 
-        # Build purchase detail
         last_source = cust["last_source"]
         purchase_details.append({
             "customer_email": email,
@@ -254,7 +238,7 @@ def build_data_summary(sales, report_date):
             "ad_name": first_source.get("sourceLinkAd", {}).get("name", "N/A") if first_source and first_source.get("sourceLinkAd") else "N/A",
             "last_touch_source": last_source.get("name", "N/A") if last_source else "N/A",
             "last_touch_platform": last_source.get("trafficSource", {}).get("name", "N/A") if last_source else "N/A",
-            "source_checkout_page": cust.get("source_checkout_page", "N/A"),
+            "source_checkout_page": urlparse(page).path if page else "N/A",
         })
 
     num_purchases = len(customers)
@@ -279,7 +263,7 @@ def build_data_summary(sales, report_date):
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Send to Claude for analysis
+# Step 3: Claude generates styled HTML report
 # ---------------------------------------------------------------------------
 CLAUDE_SYSTEM_PROMPT = """You are a senior marketing analyst creating a daily performance report for NEW Edge subscriptions at Benzinga.
 
@@ -288,54 +272,51 @@ IMPORTANT CONTEXT:
 - "Source checkout page" = the landing page where the customer entered the funnel (e.g., /benzinga-edge-5). Upgrade and thank-you pages are excluded.
 - This report covers only NEW subscriptions (not recurring renewals).
 
-Structure your report exactly like this:
+OUTPUT FORMAT: You must return a complete, self-contained HTML document with inline CSS styling. The report should look professional and be easy to scan.
 
-# Edge Daily Report — {date}
+Use the Benzinga brand design system with these EXACT colors and fonts:
+- Navy (background): #000725
+- Surface (cards/sections): #071A47
+- Amber (accent/highlights): #F07520
+- White (text): #F8F9FB
+- Blue (secondary): #1B3D82
+- Grey (muted text): #5A6B7A
+- Silver (borders/dividers): #D7DADE
+- Font: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif
+- Body background: #020B1A
+- Text color: #B0B8C4 for body, #FFFFFF for headings and key numbers
+- KPI cards: #071A47 background with amber (#F07520) large bold numbers, arranged in a horizontal row
+- Tables: #071A47 background, alternating rows with #000725, white text, amber for important numbers
+- Section headers: use uppercase letter-spacing labels in grey, with amber left-border accent (4px solid #F07520)
+- Badges/pills for platforms: Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A with white text
+- Positive metrics in #198754 (green), negative/refunds in #dc3545 (red)
+- Links and highlights in amber #F07520
 
-## Quick Summary
-2-3 sentences: total new purchases, revenue, AOV, and the headline takeaway.
+Structure:
+1. Header with report date and Edge logo placeholder
+2. KPI row: Purchases | Revenue | AOV | Net Revenue
+3. Product Mix table
+4. Source Checkout Pages table (which landing pages drove purchases)
+5. Attribution: First Touch breakdown (platform + campaign with revenue)
+6. Ad Creative Performance table (ad name, campaign, platform, purchases, revenue)
+7. Last Touch breakdown
+8. Individual Purchase Details table (email, order value, items, source page, first touch, ad)
+9. Notable Patterns & Actionable Insights section
 
-## Key Metrics
-- New Purchases: X
-- Total Revenue: $X
-- Net Revenue (after refunds): $X
-- Average Order Value: $X
-- Refunds: $X
-
-## Product Mix
-Break down by product variant with revenue. Note when customers bundle (e.g., Annual + 3-Year Upgrade).
-
-## Source Checkout Pages
-Which landing pages drove the new purchases. Show the page path and number of purchases from each.
-
-## Attribution Breakdown
-### First Touch (How They Found Us)
-Break down by platform and campaign. Show revenue per source.
-
-### Last Touch
-Final touchpoint before purchase.
-
-## Ad Creative Performance
-Show which specific ad creatives drove purchases. Include the ad name, campaign it belongs to, platform, number of purchases, and revenue. This is critical for knowing which ads to scale and which to cut. If a purchase came from organic/unattributed traffic (no ad creative), note that separately.
-
-## Notable Patterns & Actionable Insights
-Combine patterns and 2-3 concrete recommendations into one section. Include ad-level recommendations when the data supports it (e.g., "Scale ad X — it drove Y purchases at $Z AOV").
-
-Keep the tone professional but conversational. Use dollar amounts and percentages."""
+Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs, then drill into tables as needed. Keep written analysis concise and punchy."""
 
 
 def analyze_with_claude(summary):
-    """Send the data summary to Claude for analysis and get a formatted report."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=8192,
         system=CLAUDE_SYSTEM_PROMPT,
         messages=[
             {
                 "role": "user",
-                "content": f"Here is yesterday's Hyros data for NEW Edge subscriptions. Generate the daily report.\n\n{json.dumps(summary, indent=2)}",
+                "content": f"Generate the styled HTML daily report for this data:\n\n{json.dumps(summary, indent=2)}",
             }
         ],
     )
@@ -344,61 +325,134 @@ def analyze_with_claude(summary):
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Write to Google Doc
+# Step 4a: Send HTML email via Resend
 # ---------------------------------------------------------------------------
-def append_to_google_doc(report_text, report_date):
-    """Append the report to a Google Doc, adding a page break before each new report."""
+def send_email(html_content, report_date):
+    if not all([RESEND_API_KEY, EMAIL_RECIPIENT]):
+        print("  Email not configured (missing RESEND_API_KEY or EMAIL_RECIPIENT). Skipping.")
+        return False
+
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={
+                "from": "Edge Daily Report <onboarding@resend.dev>",
+                "to": [addr.strip() for addr in EMAIL_RECIPIENT.split(",")],
+                "subject": f"Edge Daily Report — {report_date}",
+                "html": html_content,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            print(f"  Email sent to {EMAIL_RECIPIENT}")
+            return True
+        else:
+            print(f"  Email failed ({resp.status_code}): {resp.text}")
+            return False
+    except Exception as e:
+        print(f"  Email failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: Save HTML to Google Drive
+# ---------------------------------------------------------------------------
+def save_to_drive(html_content, report_date):
+    if not GOOGLE_DRIVE_FOLDER_ID:
+        print("  Google Drive not configured. Skipping.")
+        return
+
     creds_json = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
     creds = service_account.Credentials.from_service_account_info(
-        creds_json, scopes=["https://www.googleapis.com/auth/documents"]
+        creds_json, scopes=["https://www.googleapis.com/auth/drive.file"]
     )
-    service = build("docs", "v1", credentials=creds)
+    service = build("drive", "v3", credentials=creds)
 
-    # Get the current document length (we append at the end)
-    doc = service.documents().get(documentId=GOOGLE_DOC_ID).execute()
-    end_index = doc["body"]["content"][-1]["endIndex"] - 1
+    filename = f"Edge Report - {report_date}.html"
+    file_metadata = {
+        "name": filename,
+        "parents": [GOOGLE_DRIVE_FOLDER_ID],
+        "mimeType": "text/html",
+    }
+    media = MediaInMemoryUpload(html_content.encode("utf-8"), mimetype="text/html")
 
-    # Build the requests: page break + report content
-    requests_body = []
-
-    # Add a page break before the report (skip if doc is empty)
-    if end_index > 1:
-        requests_body.append(
-            {"insertText": {"location": {"index": end_index}, "text": "\n"}}
-        )
-        end_index += 1
-        requests_body.append(
-            {
-                "insertPageBreak": {
-                    "location": {"index": end_index}
-                }
-            }
-        )
-        end_index += 1
-        requests_body.append(
-            {"insertText": {"location": {"index": end_index}, "text": "\n"}}
-        )
-        end_index += 1
-
-    # Insert the report text
-    requests_body.append(
-        {"insertText": {"location": {"index": end_index}, "text": report_text}}
-    )
-
-    service.documents().batchUpdate(
-        documentId=GOOGLE_DOC_ID, body={"requests": requests_body}
+    file = service.files().create(
+        body=file_metadata, media_body=media, fields="id,webViewLink"
     ).execute()
 
-    print(f"Report appended to Google Doc: https://docs.google.com/document/d/{GOOGLE_DOC_ID}")
+    print(f"  Saved to Drive: {file.get('webViewLink', file.get('id'))}")
+
+
+# ---------------------------------------------------------------------------
+# Step 4c: Append metrics row to Google Sheet
+# ---------------------------------------------------------------------------
+def append_to_sheet(summary):
+    if not GOOGLE_SHEET_ID:
+        print("  Google Sheet not configured. Skipping.")
+        return
+
+    creds_json = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_json, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds)
+
+    # Check if header row exists
+    result = service.spreadsheets().values().get(
+        spreadsheetId=GOOGLE_SHEET_ID, range="A1:A1"
+    ).execute()
+    existing = result.get("values", [])
+
+    if not existing:
+        # Write header row first
+        headers = [[
+            "Date", "Purchases", "Revenue", "Net Revenue", "AOV",
+            "Refunded", "Top Source Page", "Top Platform", "Top Campaign", "Top Ad Creative"
+        ]]
+        service.spreadsheets().values().update(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range="A1",
+            valueInputOption="RAW",
+            body={"values": headers},
+        ).execute()
+
+    # Build data row
+    top_source = list(summary["source_checkout_pages"].keys())[0] if summary["source_checkout_pages"] else "N/A"
+    top_platform = list(summary["revenue_by_platform"].keys())[0] if summary["revenue_by_platform"] else "N/A"
+    top_campaign = list(summary["revenue_by_campaign"].keys())[0] if summary["revenue_by_campaign"] else "N/A"
+    top_ad = list(summary["ad_creatives"].keys())[0] if summary["ad_creatives"] else "N/A"
+
+    row = [[
+        summary["report_date"],
+        summary["total_purchases"],
+        summary["total_revenue"],
+        summary["net_revenue"],
+        summary["average_order_value"],
+        summary["total_refunded"],
+        top_source,
+        top_platform,
+        top_campaign,
+        top_ad,
+    ]]
+
+    service.spreadsheets().values().append(
+        spreadsheetId=GOOGLE_SHEET_ID,
+        range="A:J",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": row},
+    ).execute()
+
+    print(f"  Metrics appended to Sheet")
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    # Validate required config
     missing = []
-    for var in ["HYROS_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_DOC_ID"]:
+    for var in ["HYROS_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_SERVICE_ACCOUNT_JSON"]:
         if not os.environ.get(var):
             missing.append(var)
     if missing:
@@ -413,24 +467,38 @@ def main():
     print(f"Generating Edge report for {yesterday_str}...")
     print(f"  Date range: {from_date} to {to_date}")
 
-    # Pull NEW (non-recurring) Edge sales from Hyros
+    # Pull data
     print("Fetching new Edge subscriptions from Hyros...")
     sales = fetch_new_edge_sales(from_date, to_date)
 
     # Build summary (groups by customer, fetches source pages)
     summary = build_data_summary(sales, yesterday_str)
-    print(f"  Total purchases: {summary['total_purchases']}")
-    print(f"  Total revenue: ${summary['total_revenue']:,.2f}")
+    print(f"  Purchases: {summary['total_purchases']}")
+    print(f"  Revenue: ${summary['total_revenue']:,.2f}")
     print(f"  AOV: ${summary['average_order_value']:,.2f}")
 
-    # Analyze with Claude
-    print("Analyzing data with Claude...")
-    report = analyze_with_claude(summary)
+    # Generate HTML report
+    print("Generating HTML report with Claude...")
+    html_report = analyze_with_claude(summary)
+    # Strip markdown code fences if Claude wraps the HTML
+    if html_report.startswith("```"):
+        html_report = html_report.split("\n", 1)[1]
+    if html_report.endswith("```"):
+        html_report = html_report.rsplit("```", 1)[0]
+    html_report = html_report.strip()
     print("  Report generated")
 
-    # Write to Google Doc
-    print("Appending report to Google Doc...")
-    append_to_google_doc(report, yesterday_str)
+    # Output 1: Email
+    print("Sending email...")
+    send_email(html_report, yesterday_str)
+
+    # Output 2: Google Drive archive
+    print("Saving to Google Drive...")
+    save_to_drive(html_report, yesterday_str)
+
+    # Output 3: Google Sheet metrics
+    print("Appending to Google Sheet...")
+    append_to_sheet(summary)
 
     print("Done!")
 
