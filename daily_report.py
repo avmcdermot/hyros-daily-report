@@ -134,26 +134,50 @@ def fetch_new_edge_sales(from_date, to_date):
     return combined
 
 
-def fetch_source_checkout_page(email):
+def fetch_customer_click_data(email):
+    """Fetch source checkout page, UTM params, and device from click data."""
     headers = {"API-Key": HYROS_API_KEY, "Accept": "application/json"}
+    result = {"source_checkout_page": None, "utms": {}, "device": "Unknown"}
     try:
         resp = requests.get(
             f"{HYROS_BASE_URL}/leads/clicks",
             headers=headers,
-            params={"email": email, "pageSize": 50},
+            params={"email": email, "pageSize": 100},
             timeout=15,
         )
         if resp.status_code != 200:
-            return None
+            return result
         clicks = resp.json().get("result", [])
 
+        # Find source checkout page
         for click in reversed(clicks):
             page = click.get("page", "")
             if page and is_source_checkout_page(page):
-                return page
-        return None
+                result["source_checkout_page"] = page
+                break
+
+        # Collect all UTM params across clicks
+        for click in clicks:
+            parsed = click.get("parsedParameters", {})
+            for k, v in parsed.items():
+                clean_key = k.replace("amp;", "")  # fix malformed &amp; params
+                if "utm" in clean_key.lower() and clean_key not in result["utms"]:
+                    result["utms"][clean_key] = v
+
+        # Detect device from user agent
+        for click in clicks:
+            agent = click.get("agent", "")
+            if agent:
+                agent_lower = agent.lower()
+                if "mobile" in agent_lower or "android" in agent_lower or "iphone" in agent_lower:
+                    result["device"] = "Mobile"
+                else:
+                    result["device"] = "Desktop"
+                break
+
+        return result
     except Exception:
-        return None
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -185,20 +209,26 @@ def build_data_summary(sales, report_date):
         customers[email]["total_order_value"] += revenue
         customers[email]["total_refunded"] += refunded
 
-    # Fetch source pages
-    print(f"Fetching source checkout pages for {len(customers)} customers...")
+    # Fetch click data (source pages, UTMs, device)
+    print(f"Fetching click data for {len(customers)} customers...")
     for email, cust in customers.items():
-        source_page = fetch_source_checkout_page(email)
-        cust["source_checkout_page"] = source_page
+        click_data = fetch_customer_click_data(email)
+        cust["source_checkout_page"] = click_data["source_checkout_page"]
+        cust["utms"] = click_data["utms"]
+        cust["device"] = click_data["device"]
 
     # Aggregate
     total_revenue = 0
     total_refunded = 0
     platforms = {}
     campaigns = {}
-    products = {}
+    products = {}  # {name: {"revenue": X, "count": Y}}
     source_pages = {}
     ad_creatives = {}
+    utm_campaigns = {}  # {campaign: {"purchases": X, "revenue": Y}}
+    utm_sources = {}    # {source: {"purchases": X, "revenue": Y}}
+    utm_ads = {}        # {ad: {"purchases": X, "revenue": Y}}
+    devices = {}        # {device: count}
     purchase_details = []
 
     for email, cust in customers.items():
@@ -206,6 +236,10 @@ def build_data_summary(sales, report_date):
         refunded = cust["total_refunded"]
         total_revenue += order_value
         total_refunded += refunded
+
+        # Device tracking
+        device = cust.get("device", "Unknown")
+        devices[device] = devices.get(device, 0) + 1
 
         first_source = cust["first_source"]
         if first_source:
@@ -234,14 +268,42 @@ def build_data_summary(sales, report_date):
                     ad_creatives[ad_name]["purchases"] += 1
                     ad_creatives[ad_name]["revenue"] += order_value
 
+        # Product mix with counts
         for item in cust["line_items"]:
             prod = item["product"]
-            products[prod] = products.get(prod, 0) + item["revenue"]
+            if prod not in products:
+                products[prod] = {"revenue": 0, "count": 0}
+            products[prod]["revenue"] += item["revenue"]
+            products[prod]["count"] += 1
 
+        # Source checkout pages
         page = cust.get("source_checkout_page")
         if page:
             path = urlparse(page).path
             source_pages[path] = source_pages.get(path, 0) + 1
+
+        # UTM aggregation
+        utms = cust.get("utms", {})
+        utm_camp = utms.get("utm_campaign", "")
+        if utm_camp:
+            if utm_camp not in utm_campaigns:
+                utm_campaigns[utm_camp] = {"purchases": 0, "revenue": 0}
+            utm_campaigns[utm_camp]["purchases"] += 1
+            utm_campaigns[utm_camp]["revenue"] += order_value
+
+        utm_src = utms.get("utm_source", "")
+        if utm_src:
+            if utm_src not in utm_sources:
+                utm_sources[utm_src] = {"purchases": 0, "revenue": 0}
+            utm_sources[utm_src]["purchases"] += 1
+            utm_sources[utm_src]["revenue"] += order_value
+
+        utm_ad = utms.get("utm_ad", "")
+        if utm_ad:
+            if utm_ad not in utm_ads:
+                utm_ads[utm_ad] = {"purchases": 0, "revenue": 0}
+            utm_ads[utm_ad]["purchases"] += 1
+            utm_ads[utm_ad]["revenue"] += order_value
 
         last_source = cust["last_source"]
         purchase_details.append({
@@ -257,6 +319,10 @@ def build_data_summary(sales, report_date):
             "last_touch_source": last_source.get("name", "N/A") if last_source else "N/A",
             "last_touch_platform": last_source.get("trafficSource", {}).get("name", "N/A") if last_source else "N/A",
             "source_checkout_page": urlparse(page).path if page else "N/A",
+            "utm_source": utms.get("utm_source", "N/A"),
+            "utm_campaign": utms.get("utm_campaign", "N/A"),
+            "utm_ad": utms.get("utm_ad", "N/A"),
+            "device": device,
         })
 
     num_purchases = len(customers)
@@ -271,9 +337,13 @@ def build_data_summary(sales, report_date):
         "average_order_value": aov,
         "revenue_by_platform": dict(sorted(platforms.items(), key=lambda x: x[1], reverse=True)),
         "revenue_by_campaign": dict(sorted(campaigns.items(), key=lambda x: x[1], reverse=True)),
-        "revenue_by_product": dict(sorted(products.items(), key=lambda x: x[1], reverse=True)),
+        "revenue_by_product": dict(sorted(products.items(), key=lambda x: x[1]["revenue"], reverse=True)),
         "source_checkout_pages": dict(sorted(source_pages.items(), key=lambda x: x[1], reverse=True)),
         "ad_creatives": dict(sorted(ad_creatives.items(), key=lambda x: x[1]["revenue"], reverse=True)),
+        "utm_campaigns": dict(sorted(utm_campaigns.items(), key=lambda x: x[1]["revenue"], reverse=True)),
+        "utm_sources": dict(sorted(utm_sources.items(), key=lambda x: x[1]["revenue"], reverse=True)),
+        "utm_ads": dict(sorted(utm_ads.items(), key=lambda x: x[1]["revenue"], reverse=True)),
+        "devices": dict(sorted(devices.items(), key=lambda x: x[1], reverse=True)),
         "purchase_details": purchase_details,
     }
 
@@ -317,16 +387,29 @@ Layout rules:
 - Badges/pills: Use inline <span> with display:inline-block, padding:3px 10px, border-radius:12px, font-size:11px. Facebook=#1B3D82, Google=#198754, Organic=#5A6B7A, Yahoo=#6f42c1, Robinhood=#198754, Unknown=#5A6B7A — all with white text.
 - Positive metrics in #198754 (green), negative/refunds in #dc3545 (red)
 
+Product Mix table rules:
+- Columns: Product | Count | Revenue | % of Gross
+- The "Count" column should show a small amber (#F07520) circular badge with the number inside (display:inline-block, width:28px, height:28px, line-height:28px, text-align:center, border-radius:50%, background:#F07520, color:#000725, font-weight:bold, font-size:13px)
+
+UTM Breakdown table rules:
+- Show three sub-tables if data exists: UTM Campaigns, UTM Sources, UTM Ads
+- Each sub-table: columns are Name | Purchases | Revenue
+- Only show sub-tables that have data (skip empty ones)
+
+Device split: show a small inline note near the KPIs or below them, e.g. "Mobile: 6 | Desktop: 5"
+
 Structure:
 1. Header banner: navy background with "Benzinga EDGE · DAILY REPORT" text, report date, "New Subscriptions Only" subtitle
 2. KPI row (4 cells in one table row): Purchases | Gross Revenue | AOV | Net Revenue
-3. Product Mix table
-4. Source Checkout Pages table (which landing pages drove purchases)
-5. Attribution: First Touch breakdown (platform + campaign with revenue)
-6. Ad Creative Performance table (ad name, campaign, platform, purchases, revenue)
-7. Last Touch breakdown
-8. Individual Purchase Details table (email, order value, items, source page, first touch, ad)
-9. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
+3. Device split (small text below KPIs)
+4. Product Mix table (with count badges)
+5. Source Checkout Pages table (which landing pages drove purchases)
+6. UTM Breakdown (utm_campaign, utm_source, utm_ad tables — between Source Pages and First Touch)
+7. Attribution: First Touch breakdown (platform + campaign with revenue)
+8. Ad Creative Performance table (ad name, campaign, platform, purchases, revenue)
+9. Last Touch breakdown
+10. Individual Purchase Details table (email, order value, items, source page, first touch, utm_campaign, utm_ad, device)
+11. Notable Patterns & Actionable Insights section (2-3 bullet points, concise)
 
 Make it scannable — a busy executive should get the key story in 5 seconds from the KPIs. Keep written analysis to 2-3 punchy bullet points max."""
 
