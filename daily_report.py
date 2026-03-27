@@ -461,7 +461,7 @@ UTM Breakdown table rules:
 Device split: show a small inline note near the KPIs or below them, e.g. "Mobile: 6 | Desktop: 5"
 
 Structure:
-1. Header banner: navy background with "Benzinga EDGE · DAILY REPORT" text, report date, "New Subscriptions Only" subtitle
+1. Header banner: navy background with "Benzinga EDGE · DAILY REPORT" text, report date, "New Subscriptions Only" subtitle. Include an "ALL REPORTS" button in the top-right area of the header that links to https://docs.google.com/spreadsheets/d/1tfnFznCmxaRTx5PFk9-vm4Jzv-EJ2uVRFSZVm7FNyJQ/edit — style it as: display:inline-block, padding:8px 18px, background:#F07520, color:#000725, font-weight:bold, font-size:12px, letter-spacing:1px, text-decoration:none, border-radius:4px
 2. KPI row (4 cells in one table row): Purchases | Gross Revenue | AOV | Net Revenue
 3. Device split (small text below KPIs)
 4. Product Mix table (with count badges)
