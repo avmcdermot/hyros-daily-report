@@ -2,6 +2,15 @@ name: Daily Hyros Edge Report
 
 on:
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Test mode (only emails you, not the full list)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: write
@@ -30,6 +39,8 @@ jobs:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+          TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python daily_report.py
 
