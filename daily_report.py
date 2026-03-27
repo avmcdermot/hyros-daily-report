@@ -438,7 +438,7 @@ DESIGN PRINCIPLE: Full dark theme, but with CLEAR LAYERS. The page is #000725, c
 Layout rules:
 - The entire email body: background #000725
 - Header banner: seamless with the page background, just text and an amber divider line
-- KPI cards: single <table>, one <tr>, 4 <td> cells (25% width). #071A47 background, 1px solid #1B3D82 border, 8px border-radius. Amber numbers, white labels. 8px cellspacing.
+- KPI cards: single <table>, one <tr>, 4 <td> cells (25% width). #071A47 background, 1px solid #1B3D82 border, 8px border-radius. White labels. 8px cellspacing. Color rules for KPI numbers: Purchases=#F8F9FB (white), Gross Revenue=#F07520 (amber), AOV=#F07520 (amber), Net Revenue=#198754 (green). Net Revenue must ALWAYS be green (#198754).
 - Section containers: each section (Product Mix, UTM, Source Pages, etc.) is wrapped in a <table> with bgcolor="#0A1E4A", 1px solid #1B3D82 border, 12px border-radius, 20px cellpadding. 24px margin-bottom between sections.
 - Section headers: #F8F9FB white text, uppercase, letter-spacing:2px, with 4px left border in amber. INSIDE the container, not floating outside.
 - Data tables INSIDE containers: header row #1B3D82, body rows alternate #0D2255 / #0A1E4A. Text: #B0B8C4 for regular, #F8F9FB for important, #F07520 for dollar amounts. Cell borders: 1px solid rgba(27,61,130,0.5).
