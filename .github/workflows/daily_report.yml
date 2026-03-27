@@ -1,8 +1,6 @@
 name: Daily Hyros Edge Report
 
 on:
-  schedule:
-    - cron: '0 13 * * *'
   workflow_dispatch:
 
 permissions:
