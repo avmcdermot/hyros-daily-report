@@ -265,6 +265,7 @@ def build_data_summary(sales, report_date):
     utm_campaigns = {}  # {campaign: {"purchases": X, "revenue": Y}}
     utm_sources = {}    # {source: {"purchases": X, "revenue": Y}}
     utm_ads = {}        # {ad: {"purchases": X, "revenue": Y}}
+    utm_ad_types = {}   # {ad_type: {"purchases": X, "revenue": Y}}
     devices = {}        # {device: count}
     purchase_details = []
 
@@ -345,6 +346,11 @@ def build_data_summary(sales, report_date):
 
         # Also track utm_adType as a separate breakdown
         utm_ad_type = utms.get("utm_adType", "") or utms.get("utm_ad_type", "")
+        if utm_ad_type:
+            if utm_ad_type not in utm_ad_types:
+                utm_ad_types[utm_ad_type] = {"purchases": 0, "revenue": 0}
+            utm_ad_types[utm_ad_type]["purchases"] += 1
+            utm_ad_types[utm_ad_type]["revenue"] += order_value
 
         last_source = cust["last_source"]
         purchase_details.append({
@@ -386,6 +392,7 @@ def build_data_summary(sales, report_date):
         "utm_campaigns": dict(sorted(utm_campaigns.items(), key=lambda x: x[1]["revenue"], reverse=True)),
         "utm_sources": dict(sorted(utm_sources.items(), key=lambda x: x[1]["revenue"], reverse=True)),
         "utm_ads": dict(sorted(utm_ads.items(), key=lambda x: x[1]["revenue"], reverse=True)),
+        "utm_ad_types": dict(sorted(utm_ad_types.items(), key=lambda x: x[1]["revenue"], reverse=True)),
         "devices": dict(sorted(devices.items(), key=lambda x: x[1], reverse=True)),
         "purchase_details": purchase_details,
     }
@@ -445,9 +452,9 @@ Product Mix table rules:
 - The "Count" column should show a small amber (#F07520) circular badge with the number inside (display:inline-block, width:28px, height:28px, line-height:28px, text-align:center, border-radius:50%, background:#F07520, color:#000725, font-weight:bold, font-size:13px)
 
 UTM Breakdown table rules:
-- Show three sub-tables: UTM Campaigns, UTM Sources, UTM Ads
+- Show four sub-tables: UTM Campaigns, UTM Sources, UTM Ads, UTM Ad Types
 - Each sub-table: columns are Name | Purchases | Revenue
-- IMPORTANT: You MUST render all data rows from the utm_campaigns, utm_sources, and utm_ads objects. Do NOT skip data or show empty tables. Each key in these objects is a row.
+- IMPORTANT: You MUST render all data rows from the utm_campaigns, utm_sources, utm_ads, and utm_ad_types objects. Do NOT skip data or show empty tables. Each key in these objects is a row.
 
 Device split: show a small inline note near the KPIs or below them, e.g. "Mobile: 6 | Desktop: 5"
 
