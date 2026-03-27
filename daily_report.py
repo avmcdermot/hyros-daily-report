@@ -28,6 +28,8 @@ GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 EMAIL_RECIPIENT = os.environ.get("EMAIL_RECIPIENT", "").strip()
+TEST_EMAIL = os.environ.get("TEST_EMAIL", "").strip()
+TEST_MODE = os.environ.get("TEST_MODE", "false").strip().lower() == "true"
 
 HYROS_BASE_URL = "https://api.hyros.com/v1/api/v1.0"
 US_EASTERN = timezone(timedelta(hours=-4))  # EDT
@@ -515,20 +517,29 @@ def send_email(html_content, report_date):
         print("  Email not configured (missing RESEND_API_KEY or EMAIL_RECIPIENT). Skipping.")
         return False
 
+    # In test mode, only send to your test email
+    if TEST_MODE and TEST_EMAIL:
+        recipients = [TEST_EMAIL]
+        subject = f"[TEST] Edge Daily Report — {report_date}"
+        print(f"  TEST MODE: sending only to {TEST_EMAIL}")
+    else:
+        recipients = [addr.strip() for addr in EMAIL_RECIPIENT.split(",")]
+        subject = f"Edge Daily Report — {report_date}"
+
     try:
         resp = requests.post(
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
             json={
                 "from": "Edge Daily Report <onboarding@resend.dev>",
-                "to": [addr.strip() for addr in EMAIL_RECIPIENT.split(",")],
-                "subject": f"Edge Daily Report — {report_date}",
+                "to": recipients,
+                "subject": subject,
                 "html": html_content,
             },
             timeout=15,
         )
         if resp.status_code == 200:
-            print(f"  Email sent to {EMAIL_RECIPIENT}")
+            print(f"  Email sent to {', '.join(recipients)}")
             return True
         else:
             print(f"  Email failed ({resp.status_code}): {resp.text}")
