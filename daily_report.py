@@ -531,7 +531,7 @@ def send_email(html_content, report_date):
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
             json={
-                "from": "Edge Daily Report <onboarding@resend.dev>",
+                "from": "Edge Daily Report <edge-report@avmstrategygroup.com>",
                 "to": recipients,
                 "subject": subject,
                 "html": html_content,
