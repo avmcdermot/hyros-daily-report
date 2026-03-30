@@ -104,7 +104,9 @@ def fetch_new_edge_sales(from_date, to_date):
         if not page_id or not sales:
             break
 
-    # Step 1: Find Edge customers and their sales (exclude @benzinga.com test orders)
+    # Step 1: Find core Edge customers and their sales (exclude @benzinga.com test orders)
+    # "Momentum Edge" is actually a Trade Alerts product (upsell in the Edge funnel),
+    # NOT a core Edge subscription — so we exclude it from Step 1.
     edge_sales = []
     edge_customers = set()
     skipped_test = 0
@@ -116,12 +118,15 @@ def fetch_new_edge_sales(from_date, to_date):
         product = sale.get("product", {})
         name = (product.get("name") or "").lower()
         tag = (product.get("tag") or "").lower()
-        if "edge" in name or "edge" in tag:
+        # Match "edge" but exclude "momentum edge" (that's Trade Alerts)
+        is_edge = "edge" in name or "edge" in tag
+        is_momentum = "momentum" in name or "momentum" in tag
+        if is_edge and not is_momentum:
             edge_sales.append(sale)
             if email:
                 edge_customers.add(email)
 
-    # Step 2: Find Trade Alerts upsells by those same Edge customers
+    # Step 2: Find Trade Alerts / Momentum Edge upsells by those same Edge customers
     upsell_sales = []
     for sale in all_sales:
         email = sale.get("lead", {}).get("email", "")
@@ -132,7 +137,7 @@ def fetch_new_edge_sales(from_date, to_date):
         product = sale.get("product", {})
         name = (product.get("name") or "").lower()
         tag = (product.get("tag") or "").lower()
-        if "trade" in name or "trade-alerts" in tag:
+        if "trade" in name or "trade-alerts" in tag or "momentum" in name or "momentum" in tag:
             # Avoid duplicates (in case it was already captured)
             if sale not in edge_sales:
                 upsell_sales.append(sale)
