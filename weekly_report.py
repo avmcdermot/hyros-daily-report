@@ -47,7 +47,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "avmcdermot/hyros-daily-report
 # Helper: extract date string from a Hyros sale object
 # ---------------------------------------------------------------------------
 def extract_sale_date(sale):
-    """Try multiple date fields and formats (ISO string or Unix ms timestamp)."""
+    """Try multiple date fields and formats from Hyros sale objects."""
     for field in ("creationDate", "createdDate", "date", "saleDate", "created_at"):
         val = sale.get(field)
         if val is None:
@@ -63,6 +63,15 @@ def extract_sale_date(sale):
         if val_str.isdigit():
             dt = datetime.fromtimestamp(int(val_str) / 1000, tz=US_EASTERN)
             return dt.strftime("%Y-%m-%d")
+        # Hyros human-readable format: "Sun Mar 29 22:28:30 UTC 2026"
+        try:
+            # Replace timezone abbreviation for parsing, then convert to Eastern
+            clean = val_str.replace(" UTC ", " +0000 ").replace(" EST ", " -0500 ").replace(" EDT ", " -0400 ")
+            dt = datetime.strptime(clean, "%a %b %d %H:%M:%S %z %Y")
+            dt_eastern = dt.astimezone(US_EASTERN)
+            return dt_eastern.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
         # ISO 8601 string like "2026-03-25T14:30:00..."
         if len(val_str) >= 10 and val_str[4:5] == "-":
             return val_str[:10]
