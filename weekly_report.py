@@ -48,7 +48,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "avmcdermot/hyros-daily-report
 # ---------------------------------------------------------------------------
 def extract_sale_date(sale):
     """Try multiple date fields and formats (ISO string or Unix ms timestamp)."""
-    for field in ("createdDate", "date", "saleDate", "created_at"):
+    for field in ("creationDate", "createdDate", "date", "saleDate", "created_at"):
         val = sale.get(field)
         if val is None:
             continue
@@ -100,9 +100,10 @@ def build_weekly_summary(sales, week_label, start_date, end_date):
     if sales:
         sample = sales[0]
         print(f"  [DEBUG] Sample sale keys: {list(sample.keys())}")
-        for field in ("createdDate", "date", "saleDate", "created_at"):
+        for field in ("creationDate", "createdDate", "date", "saleDate", "created_at"):
             if field in sample:
                 print(f"  [DEBUG] {field} = {sample[field]} (type: {type(sample[field]).__name__})")
+        print(f"  [DEBUG] extract_sale_date result: {extract_sale_date(sample)}")
 
     for sale in sales:
         email = sale.get("lead", {}).get("email", "unknown")
