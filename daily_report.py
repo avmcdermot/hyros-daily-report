@@ -104,16 +104,20 @@ def fetch_new_edge_sales(from_date, to_date):
         if not page_id or not sales:
             break
 
-    # Step 1: Find Edge customers and their sales
+    # Step 1: Find Edge customers and their sales (exclude @benzinga.com test orders)
     edge_sales = []
     edge_customers = set()
+    skipped_test = 0
     for sale in all_sales:
+        email = sale.get("lead", {}).get("email", "")
+        if email and email.lower().endswith("@benzinga.com"):
+            skipped_test += 1
+            continue
         product = sale.get("product", {})
         name = (product.get("name") or "").lower()
         tag = (product.get("tag") or "").lower()
         if "edge" in name or "edge" in tag:
             edge_sales.append(sale)
-            email = sale.get("lead", {}).get("email", "")
             if email:
                 edge_customers.add(email)
 
@@ -121,6 +125,8 @@ def fetch_new_edge_sales(from_date, to_date):
     upsell_sales = []
     for sale in all_sales:
         email = sale.get("lead", {}).get("email", "")
+        if email and email.lower().endswith("@benzinga.com"):
+            continue
         if email not in edge_customers:
             continue
         product = sale.get("product", {})
@@ -132,6 +138,8 @@ def fetch_new_edge_sales(from_date, to_date):
                 upsell_sales.append(sale)
 
     combined = edge_sales + upsell_sales
+    if skipped_test:
+        print(f"  Skipped {skipped_test} @benzinga.com test order(s)")
     print(f"  Total non-recurring sales: {len(all_sales)}, Edge line items: {len(edge_sales)}, Trade Alerts upsells: {len(upsell_sales)}")
     return combined
 
