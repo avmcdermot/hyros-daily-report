@@ -44,6 +44,32 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "avmcdermot/hyros-daily-report
 
 
 # ---------------------------------------------------------------------------
+# Helper: extract date string from a Hyros sale object
+# ---------------------------------------------------------------------------
+def extract_sale_date(sale):
+    """Try multiple date fields and formats (ISO string or Unix ms timestamp)."""
+    for field in ("createdDate", "date", "saleDate", "created_at"):
+        val = sale.get(field)
+        if val is None:
+            continue
+        # Unix timestamp in milliseconds (number or numeric string)
+        if isinstance(val, (int, float)):
+            dt = datetime.fromtimestamp(val / 1000, tz=US_EASTERN)
+            return dt.strftime("%Y-%m-%d")
+        val_str = str(val).strip()
+        if not val_str:
+            continue
+        # Numeric string (Unix ms)
+        if val_str.isdigit():
+            dt = datetime.fromtimestamp(int(val_str) / 1000, tz=US_EASTERN)
+            return dt.strftime("%Y-%m-%d")
+        # ISO 8601 string like "2026-03-25T14:30:00..."
+        if len(val_str) >= 10 and val_str[4:5] == "-":
+            return val_str[:10]
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Date range: previous Monday through Sunday
 # ---------------------------------------------------------------------------
 def get_last_week_range():
@@ -70,15 +96,19 @@ def build_weekly_summary(sales, week_label, start_date, end_date):
     daily_revenue = {}  # {date_str: revenue}
     daily_purchases = {}  # {date_str: count}
 
+    # Debug: print first sale's keys so we can see what date fields exist
+    if sales:
+        sample = sales[0]
+        print(f"  [DEBUG] Sample sale keys: {list(sample.keys())}")
+        for field in ("createdDate", "date", "saleDate", "created_at"):
+            if field in sample:
+                print(f"  [DEBUG] {field} = {sample[field]} (type: {type(sample[field]).__name__})")
+
     for sale in sales:
         email = sale.get("lead", {}).get("email", "unknown")
 
         # Track daily breakdown by sale date
-        sale_date = sale.get("createdDate", "")
-        if sale_date:
-            day_str = sale_date[:10]  # YYYY-MM-DD
-        else:
-            day_str = "unknown"
+        day_str = extract_sale_date(sale)
 
         if email not in customers:
             customers[email] = {
@@ -468,11 +498,24 @@ def main():
     print("Fetching new Edge subscriptions from Hyros...")
     sales = fetch_new_edge_sales(from_date, to_date)
 
+    # Debug: print all customer emails from Hyros so we can cross-check
+    hyros_emails = set()
+    for sale in sales:
+        email = sale.get("lead", {}).get("email", "unknown")
+        hyros_emails.add(email.lower())
+    print(f"  [DEBUG] Unique customer emails from Hyros ({len(hyros_emails)}):")
+    for e in sorted(hyros_emails):
+        print(f"    {e}")
+
     # Build weekly summary
     summary = build_weekly_summary(sales, week_label, from_date, to_date)
     print(f"  Purchases: {summary['total_purchases']}")
     print(f"  Revenue: ${summary['total_revenue']:,.2f}")
     print(f"  AOV: ${summary['average_order_value']:,.2f}")
+    if summary.get("daily_breakdown"):
+        print(f"  Daily breakdown:")
+        for day in summary["daily_breakdown"]:
+            print(f"    {day['date']}: {day['purchases']} purchases, ${day['revenue']:,.2f}")
 
     # Generate HTML report
     print("Generating weekly HTML report with Claude...")
