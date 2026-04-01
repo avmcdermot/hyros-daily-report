@@ -344,8 +344,10 @@ def build_data_summary(sales, report_date):
                     ad_creatives[ad_name]["purchases"] += 1
                     ad_creatives[ad_name]["revenue"] += order_value
 
-        # Product mix with counts and refunds
+        # Product mix with counts and refunds (skip $0 items from upgrade adjustments)
         for item in cust["line_items"]:
+            if item["revenue"] == 0 and item["refunded"] == 0:
+                continue
             prod = item["product"]
             if prod not in products:
                 products[prod] = {"revenue": 0, "count": 0, "refunded": 0}
