@@ -261,6 +261,29 @@ def build_data_summary(sales, report_date):
         customers[email]["total_order_value"] += revenue
         customers[email]["total_refunded"] += refunded
 
+    # Revenue adjustment: when a customer has an upgrade (3-Year, 2-Year),
+    # the upgrade price REPLACES the base annual — they don't pay both.
+    # Zero out the base product revenue for those customers.
+    upgrade_keywords = ("3-Year Upgrade", "2-Year Upgrade")
+    base_keywords = ("Annual", "Monthly", "Trial")
+    adjusted_count = 0
+    for email, cust in customers.items():
+        has_upgrade = any(
+            any(uk in item["product"] for uk in upgrade_keywords)
+            for item in cust["line_items"]
+        )
+        if has_upgrade:
+            adjusted_rev = 0
+            for item in cust["line_items"]:
+                if any(bk in item["product"] for bk in base_keywords) and not any(uk in item["product"] for uk in upgrade_keywords):
+                    adjusted_rev += item["revenue"]
+                    item["revenue"] = 0
+            if adjusted_rev > 0:
+                cust["total_order_value"] -= adjusted_rev
+                adjusted_count += 1
+    if adjusted_count:
+        print(f"  Adjusted revenue for {adjusted_count} customer(s) with upgrades (base price subsumed by upgrade)")
+
     # Fetch click data (source pages, UTMs, device)
     print(f"Fetching click data for {len(customers)} customers...")
     for email, cust in customers.items():
