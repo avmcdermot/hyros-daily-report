@@ -143,6 +143,28 @@ def build_weekly_summary(sales, week_label, start_date, end_date):
         customers[email]["total_order_value"] += revenue
         customers[email]["total_refunded"] += refunded
 
+    # Revenue adjustment: when a customer has an upgrade (3-Year, 2-Year),
+    # the upgrade price REPLACES the base annual — they don't pay both.
+    upgrade_keywords = ("3-Year Upgrade", "2-Year Upgrade")
+    base_keywords = ("Annual", "Monthly", "Trial")
+    adjusted_count = 0
+    for email, cust in customers.items():
+        has_upgrade = any(
+            any(uk in item["product"] for uk in upgrade_keywords)
+            for item in cust["line_items"]
+        )
+        if has_upgrade:
+            adjusted_rev = 0
+            for item in cust["line_items"]:
+                if any(bk in item["product"] for bk in base_keywords) and not any(uk in item["product"] for uk in upgrade_keywords):
+                    adjusted_rev += item["revenue"]
+                    item["revenue"] = 0
+            if adjusted_rev > 0:
+                cust["total_order_value"] -= adjusted_rev
+                adjusted_count += 1
+    if adjusted_count:
+        print(f"  Adjusted revenue for {adjusted_count} customer(s) with upgrades (base price subsumed by upgrade)")
+
     # Build daily breakdown from customers
     for email, cust in customers.items():
         day = cust["purchase_day"]
@@ -208,6 +230,8 @@ def build_weekly_summary(sales, week_label, start_date, end_date):
                     ad_creatives[ad_name]["revenue"] += order_value
 
         for item in cust["line_items"]:
+            if item["revenue"] == 0 and item["refunded"] == 0:
+                continue
             prod = item["product"]
             if prod not in products:
                 products[prod] = {"revenue": 0, "count": 0, "refunded": 0}
